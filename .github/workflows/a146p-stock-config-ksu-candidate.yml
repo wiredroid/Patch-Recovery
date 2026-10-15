@@ -1,0 +1,96 @@
+name: A146P stock-config 6.6.89 KernelSU ABI research
+on:
+  push:
+    branches: [a146p-ksunext-stock-build]
+    paths: [.github/workflows/a146p-stock-config-ksu-candidate.yml]
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  build:
+    name: Compile kernel with exact Samsung IKCONFIG and report ABI mismatches
+    runs-on: ubuntu-24.04
+    timeout-minutes: 110
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install kernel toolchain
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends git make gcc clang-18 llvm-18 lld-18 bc bison flex libssl-dev libelf-dev dwarves cpio rsync python3 zstd
+      - name: Fetch pinned kernel and KernelSU Next
+        run: |
+          set -euo pipefail
+          mkdir -p work report out
+          git clone --depth=1 https://github.com/physwizz/a146p.git work/physwizz
+          test "$(git -C work/physwizz rev-parse HEAD)" = 6560c1ca1f009dd3e53b698245bf2df1b9804e03
+          git clone --filter=blob:none --no-checkout https://github.com/KernelSU-Next/KernelSU-Next.git work/ksunext
+          git -C work/ksunext fetch --depth=1 origin 159bc7da4266fd9331f63e25901629db4b7bfff8
+          git -C work/ksunext checkout --detach FETCH_HEAD
+      - name: Preserve actual stock options and derive usable build config
+        run: |
+          set -euo pipefail
+          export PATH=/usr/lib/llvm-18/bin:$PATH
+          ROOT="$PWD"; SRC="$ROOT/work/physwizz/kernel-6.6"; OUT="$ROOT/work/stock-reconstructed"
+          mkdir -p "$OUT"
+          cp a146p-stock/stock-A146PXXUHEZB1-6.6.89.config "$OUT/.config"
+          make -C "$SRC" O="$OUT" ARCH=arm64 LLVM=1 CC=clang LD=ld.lld olddefconfig
+          cp "$OUT/.config" report/stock-options-resolved.config
+          echo '6.6.89-android15-8-abA146PXXUHEZB1-4k' > report/desired-stock-uname-r.txt
+          echo 'WARNING: This build tree does not contain the exact Samsung stock 6.6.89 source or original Module.symvers. It is NOT proven stock ABI compatible. Never treat a changed vermagic as proof of ABI.' > report/NOT_STOCK_ABI_VALIDATED.txt
+          grep -E '^CONFIG_(LOCALVERSION|MODVERSIONS|LTO_NONE|MODULES|MODULE_SIG|SECURITY_DEFEX)=' "$OUT/.config" | tee report/resolved-critical-config.txt
+      - name: Attempt full reconstructed Samsung-config kernel build
+        run: |
+          set -euo pipefail
+          export PATH=/usr/lib/llvm-18/bin:$PATH
+          ROOT="$PWD"; SRC="$ROOT/work/physwizz/kernel-6.6"; OUT="$ROOT/work/stock-reconstructed"
+          set +e
+          timeout 75m make -C "$SRC" O="$OUT" ARCH=arm64 LLVM=1 CC=clang LD=ld.lld -j4 vmlinux > report/reconstructed-kernel-build.log 2>&1
+          rc=$?
+          set -e
+          tail -n 80 report/reconstructed-kernel-build.log
+          if test "$rc" -ne 0; then
+            echo "Reconstructed Samsung config build failed (exit $rc): missing or mismatched stock source/toolchain likely." | tee report/BUILD-BLOCKER.txt
+            exit "$rc"
+          fi
+          test -s "$OUT/vmlinux.symvers"
+          cp "$OUT/vmlinux.symvers" "$OUT/Module.symvers"
+          make -C "$SRC" O="$OUT" ARCH=arm64 LLVM=1 CC=clang LD=ld.lld modules_prepare
+          test -s "$OUT/scripts/module.lds"
+          cp "$OUT/System.map" report/reconstructed-System.map
+          cp "$OUT/vmlinux.symvers" report/reconstructed-vmlinux.symvers
+          make -s -C "$SRC" O="$OUT" ARCH=arm64 LLVM=1 CC=clang LD=ld.lld kernelrelease > report/actual-reconstructed-kernelrelease.txt
+      - name: Compile Samsung-featured module against reconstructed kernel
+        run: |
+          set -euo pipefail
+          export PATH=/usr/lib/llvm-18/bin:$PATH
+          ROOT="$PWD"; SRC="$ROOT/work/physwizz/kernel-6.6"; OUT="$ROOT/work/stock-reconstructed"; KSU="$ROOT/work/ksunext/kernel"
+          set +e
+          make -C "$SRC" O="$OUT" M="$KSU" ARCH=arm64 LLVM=1 CC=clang LD=ld.lld CONFIG_KSU=m \
+            CONFIG_KSU_SAMSUNG_DEFEX=y CONFIG_KSU_SAMSUNG_RKP=y CONFIG_KSU_SAMSUNG_NO_PATCH_TEXT=y CONFIG_KSU_SAMSUNG_KDP=n \
+            KBUILD_MODPOST_WARN=1 -j2 modules > report/ksu-stock-config-build.log 2>&1
+          rc=$?
+          set -e
+          tail -n 75 report/ksu-stock-config-build.log
+          test "$rc" -eq 0
+          test -s "$KSU/kernelsu.ko"
+          cp "$KSU/kernelsu.ko" out/a146p-stock-CONFIG-ONLY-NOT-STOCK-ABI.ko
+          sha256sum out/*.ko | tee report/sha256.txt
+          strings out/*.ko | grep '^vermagic=' | tee report/vermagic.txt
+      - name: Analyze symbol existence independently from exports
+        run: |
+          set -euo pipefail
+          nm -u out/*.ko | awk '{print $NF}' | sort -u > report/undefined-ELF-imports.txt
+          awk '{print $3}' report/reconstructed-System.map | sort -u > report/all-reconstructed-kernel-symbols.txt
+          awk '{print $2}' report/reconstructed-vmlinux.symvers | sort -u > report/reconstructed-EXPORT-symbols.txt
+          comm -23 report/undefined-ELF-imports.txt report/all-reconstructed-kernel-symbols.txt > report/unresolvable-in-reconstructed-kernel.txt
+          comm -23 report/undefined-ELF-imports.txt report/reconstructed-EXPORT-symbols.txt > report/unexported-in-reconstructed-kernel.txt
+          wc -l report/undefined-ELF-imports.txt report/unresolvable-in-reconstructed-kernel.txt report/unexported-in-reconstructed-kernel.txt
+          test ! -s report/unresolvable-in-reconstructed-kernel.txt
+      - name: Always upload ABI and compiler diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: A146P-stock-configuration-ABI-research-NOT-PRODUCTION
+          path: |
+            report/
+            out/
+          if-no-files-found: warn
