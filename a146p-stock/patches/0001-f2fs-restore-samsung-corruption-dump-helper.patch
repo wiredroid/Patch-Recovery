@@ -1,0 +1,73 @@
+diff --git a/fs/f2fs/f2fs.h b/fs/f2fs/f2fs.h
+--- a/fs/f2fs/f2fs.h
++++ b/fs/f2fs/f2fs.h
+@@ -25,6 +25,8 @@
+ #include <linux/part_stat.h>
+ #include <linux/rw_hint.h>
+ #include <crypto/hash.h>
++#include <linux/ctype.h>
++#include "../mount.h"
+ 
+ #include <linux/fscrypt.h>
+ #include <linux/fsverity.h>
+@@ -3563,6 +3565,60 @@
+ 	return true;
+ }
+ 
++/* Samsung A146P 6.6.50 directory-corruption hex diagnostic; source-ported as an unverified 6.6.89 hypothesis. */
++extern int ignore_fs_panic;
++
++static inline void print_block_data(struct f2fs_sb_info *sbi, sector_t blocknr,
++		      unsigned char *data_to_dump, int start, int len)
++{
++	int i, j;
++	int bh_offset = (start / 16) * 16;
++	char row_data[17] = { 0, };
++	char row_hex[50] = { 0, };
++	char ch;
++	struct mount *mnt = NULL;
++	struct super_block *sb = sbi->sb;
++
++	if (ignore_fs_panic)
++		return;
++
++	f2fs_err(sbi, "As F2FS-fs error, printing data in hex");
++	f2fs_err(sbi, " [partition info] s_id : %s, start sector# : %llu",
++					sb->s_id, sb->s_bdev->bd_start_sect);
++	f2fs_err(sbi, " dump block# : %llu, start offset(byte) : %d",
++					blocknr, start);
++	f2fs_err(sbi, " length(byte) : %d, data_to_dump 0x%p",
++					len, (void *)data_to_dump);
++	if (!list_empty(&sb->s_mounts)) {
++		mnt = list_first_entry(&sb->s_mounts, struct mount, mnt_instance);
++		if (mnt)
++			f2fs_err(sbi, " mountpoint : %s",
++							mnt->mnt_mountpoint->d_name.name);
++	}
++	f2fs_err(sbi, "-------------------------------------------------");
++	for (i = 0; i < (len + 15) / 16; i++) {
++		for (j = 0; j < 16; j++) {
++			ch = *(data_to_dump + bh_offset + j);
++			if (start <= bh_offset + j
++				&& start + len > bh_offset + j) {
++
++				if (isascii(ch) && isprint(ch))
++					sprintf(row_data + j, "%c", ch);
++				else
++					sprintf(row_data + j, ".");
++
++				sprintf(row_hex + (j * 3), "%2.2x ", ch);
++			} else {
++				sprintf(row_data + j, " ");
++				sprintf(row_hex + (j * 3), "-- ");
++			}
++		}
++		f2fs_err(sbi, "0x%4.4x : %s | %s", bh_offset, row_hex, row_data);
++		bh_offset += 16;
++	}
++	f2fs_err(sbi, "-------------------------------------------------");
++}
++
+ /*
+  * file.c
+  */
