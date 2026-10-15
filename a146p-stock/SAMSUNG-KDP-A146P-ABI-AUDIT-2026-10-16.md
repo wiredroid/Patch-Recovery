@@ -40,3 +40,20 @@ Sources:
 - https://github.com/KernelSU-Next/KernelSU-Next/blob/159bc7da4266fd9331f63e25901629db4b7bfff8/kernel/compat/samsung_kdp.c
 - https://github.com/KernelSU-Next/KernelSU-Next/blob/159bc7da4266fd9331f63e25901629db4b7bfff8/kernel/core/init.c
 - https://github.com/wiredroid/Patch-Recovery/blob/a146p-ksunext-stock-build/.github/workflows/a146p-samsung-compat-ksu.yml
+
+## Live Termux confirmation (user-reported, 2026-10-16)
+
+The user executed the exact read-only rooted `/proc/kallsyms` one-liner on their then-current A146P Physwizz environment and reported:
+
+```
+prepare_ro_creds NOT_VISIBLE
+kdp_assign_pgd NOT_VISIBLE
+kdp_usecount_dec_and_test NOT_VISIBLE
+inc_rlimit_ucounts PRESENT
+dec_rlimit_ucounts PRESENT
+commit_creds PRESENT
+```
+
+This is direct **user-reported live symbol visibility evidence** (not independently device-attested and not a module-load test). It corroborates the previous stock BTF and Physwizz source analyses: 0/3 KDP-specific helpers visible, but generic credentials/ucounts functions accessible. NOT_VISIBLE is not strict proof of absence because `/proc/kallsyms` visibility can be constrained and symbols may not appear with the expected names.
+
+**Decision: retain `CONFIG_KSU_SAMSUNG_KDP=n` for the current Physwizz Samsung RKP/DEFEX candidate.** Do not create or recommend a KDP=y flash candidate based on these results. Separately validate the active root provider after migration; a working `su -c` by itself does not demonstrate independence from FolkPatch.
