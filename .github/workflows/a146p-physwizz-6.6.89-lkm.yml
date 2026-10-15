@@ -58,6 +58,13 @@ jobs:
             exit 9
           fi
           wc -l "$OUT/Module.symvers" | tee "$ROOT/report/kernel-export-count.txt"
+          echo "Preparing final module linker script"
+          make -C "$SRCTREE" O="$OUT" ARCH=arm64 LLVM=1 CC=clang LD=ld.lld -j2 modules_prepare
+          if test ! -s "$OUT/scripts/module.lds"; then
+            echo "Missing scripts/module.lds; cannot run final .ko link" >&2
+            exit 17
+          fi
+          ls -l "$OUT/scripts/module.lds" | tee "$ROOT/report/module-linker-script.txt"
       - name: Build KernelSU Next LKM against Physwizz exported symbols
         run: |
           set -euo pipefail
