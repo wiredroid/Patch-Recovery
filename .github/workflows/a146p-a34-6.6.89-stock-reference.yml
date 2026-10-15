@@ -54,7 +54,7 @@ jobs:
               fn=r['path']; file=Path('work/a34')/fn
               hash=hashlib.sha256(file.read_bytes()).hexdigest() if file.is_file() and not file.is_symlink() else 'ABSENT'
               if hash=='ABSENT': cls='A34_SOURCE_FILE_ABSENT'
-              elif hash==r['gki89_sha256']: cls='A34_MATCHES_GOOGLE89'
+              elif hash==r['google89_sha256']: cls='A34_MATCHES_GOOGLE89'
               elif hash==r['samsung50_sha256']: cls='A34_MATCHES_SAMSUNG50'
               elif hash==r['physwizz89_sha256']: cls='A34_MATCHES_PHYSWIZZ89'
               else: cls='A34_DISTINCT'
