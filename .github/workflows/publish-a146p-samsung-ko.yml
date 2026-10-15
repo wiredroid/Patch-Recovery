@@ -1,0 +1,51 @@
+name: Publish Samsung compatibility A146P KO
+on:
+  push:
+    branches: [a146p-ksunext-stock-build]
+    paths: [.github/workflows/publish-a146p-samsung-ko.yml]
+  workflow_dispatch:
+permissions:
+  actions: read
+  contents: write
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: A146P-Physwizz-6.6.89-Samsung-compat-UNTESTED
+          run-id: 38701781224
+          github-token: ${{ github.token }}
+          path: compiled
+      - name: Verify checksum and symbol audit
+        run: |
+          set -euo pipefail
+          src=compiled/out/ksu-next-physwizz-6.6.89-samsung-compat-UNTESTED.ko
+          test -s "$src"
+          echo "1b92e9b7c3eb9e61c05b4ceae23a4fa980f1caeab81303a89b7ccfc032960f22  $src" | sha256sum -c -
+          test ! -s compiled/report/not-in-kernel-System.map.txt
+          grep -q '^PASS: all direct imports appear' compiled/report/symbol-presence.txt
+          mkdir -p dist
+          cp "$src" dist/kernelsu-a146p-physwizz-6.6.89-SAMSUNG-COMPAT-UNTESTED.ko
+          sha256sum dist/*.ko
+      - name: Publish raw file in separate prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          tag=a146p-ksunext-physwizz-6.6.89-samsung-exp2
+          ko=dist/kernelsu-a146p-physwizz-6.6.89-SAMSUNG-COMPAT-UNTESTED.ko
+          cat >/tmp/notes <<'EOF'
+          UNTESTED KernelSU Next ARM64 module compiled against Physwizz A146P 6.6.89 source, with Samsung RKP + DEFEX compatibility and no live text patching. No Samsung KDP function compatibility enabled; needs model-specific runtime check.
+          SHA256: 1b92e9b7c3eb9e61c05b4ceae23a4fa980f1caeab81303a89b7ccfc032960f22
+          All 219 external references exist in rebuilt Physwizz vmlinux/System.map, of which 59 are not standard kernel exports; ksuinit custom relocation via /proc/kallsyms is required.
+          This is NOT production validated or confirmed safe on the A146P. The module was not tested on hardware. Its version magic is 6.6.89-physwizz, which differs from the currently running 6.6.89-android15-8-g6560c1ca1f00-dirty-physwizz; KernelSU Next's official loader may attempt vermagic correction but cannot guarantee ABI compatibility.
+          EOF
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" "$ko" --clobber
+          else
+            gh release create "$tag" "$ko" --target "$GITHUB_SHA" --prerelease --title "A146P Samsung-compat KernelSU 6.6.89 test module" --notes-file /tmp/notes
+          fi
+          gh release view "$tag" --json assets,url --jq '{url,assets:[.assets[]|{name,size,url}]}'
