@@ -1,0 +1,108 @@
+name: A146P Physwizz original V-UI boot vs built-in-KSU boot forensic comparison
+on:
+  push:
+    branches: [a146p-ksunext-stock-build]
+    paths: [.github/workflows/a146p-physwizz-clean-boot-audit.yml]
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  inspect-boot-images:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download Physwizz's OFFICIAL V-UI and V-UI-ksu release images (offline research only)
+        run: |
+          set -euo pipefail
+          mkdir -p work/plain work/ksu report
+          curl --fail --location --retry 3 --retry-delay 2 \
+            'https://github.com/physwizz/a146p/releases/download/V-UI/A146p-V-UI-boot.tar' -o work/plain.tar
+          curl --fail --location --retry 3 --retry-delay 2 \
+            'https://github.com/physwizz/a146p/releases/download/V-UI-ksu/A146p-V-UI-0.9.5-boot.tar' -o work/ksu.tar
+          tar -tf work/plain.tar > report/V-UI-tar-contents.txt
+          tar -tf work/ksu.tar > report/V-UI-ksu-tar-contents.txt
+          tar -xf work/plain.tar -C work/plain
+          tar -xf work/ksu.tar -C work/ksu
+          sha256sum work/*.tar > report/tar-sha256.txt
+          find work/plain work/ksu -maxdepth 3 -type f -exec file {} \; > report/extracted-image-filetypes.txt
+          find work/plain work/ksu -maxdepth 3 -type f -exec sha256sum {} \; > report/release-image-sha256.txt
+          echo "Both official public release pages specify Android 15 binary I, but user's firmware A146PXXUHEZB1 uses bootloader binary H." > report/DO-NOT-FLASH-RELEASE-BINARY-I-ON-H.txt
+      - name: Compare boot-header metadata, kernel hashes and indicative root-patch signatures
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib,struct,gzip,io,json,re
+          a={}
+          for label in ('plain','ksu'):
+              imgs=list(Path('work',label).rglob('*.img'))
+              imgs+=list(Path('work',label).rglob('*.IMG'))
+              if len(imgs)!=1: raise ValueError(f'{label}: expected one boot.img in official TAR, found {[str(x) for x in imgs]}')
+              f=imgs[0]; data=f.read_bytes()
+              if data[:8]!=b'ANDROID!':raise ValueError(f'Bad Android boot magic: {f}')
+              ksz=struct.unpack_from('<I',data,8)[0]
+              hdrsz=struct.unpack_from('<I',data,20)[0]
+              vers=struct.unpack_from('<I',data,40)[0]
+              if vers>=3:
+                  offset=4096
+              else:
+                  pg=struct.unpack_from('<I',data,36)[0]
+                  if pg<=0 or pg>65536 or pg&(pg-1): raise ValueError(f'Invalid old boot page size: {pg}')
+                  offset=pg
+              kernel=data[offset:offset+ksz]
+              if len(kernel)!=ksz:raise ValueError('Truncated boot.img kernel')
+              try:
+                  decomp=gzip.GzipFile(fileobj=io.BytesIO(kernel)).read()
+                  decompression='gzip'
+              except Exception as e:
+                  decomp=kernel
+                  decompression='not-gzip-or-failed: '+repr(e)[:100]
+              def sha(x):return hashlib.sha256(x).hexdigest()
+              def stringhit(b,term):
+                  # Indicative ASCII strings, NOT proof of actual APatch/FolkPatch/KernelSU state
+                  pat=re.compile(term,re.IGNORECASE)
+                  hits=pat.findall(b[:])
+                  return len(hits)
+              needles=[b'Linux version 6.6.89',b'physwizz',b'KernelSU',b'APatch',b'KernelPatch',b'kpimg',b'folkpatch',b'KSU']
+              versions=[x.decode('ascii',errors='replace')[:300] for x in re.findall(rb'Linux version [\x20-\x7e]{12,250}',decomp)[:3]]
+              a[label]={
+                  'tar_image_path':str(f),'boot_image_sha256':sha(data),'boot_image_bytes':len(data),
+                  'kernel_compressed_sha256':sha(kernel),'kernel_compressed_bytes':len(kernel),
+                  'kernel_decompressed_sha256':sha(decomp),'kernel_decompressed_bytes':len(decomp),
+                  'kernel_decompression':decompression,
+                  'header_version':vers,'header_size':hdrsz,'kernel_start':offset,
+                  'kernel_version_strings':versions,
+                  'indicative_string_hit_counts':{s.decode():stringhit(decomp,s) for s in needles}
+              }
+          a['comparison']={
+              'two_boot_image_bytes_identical':a['plain']['boot_image_sha256']==a['ksu']['boot_image_sha256'],
+              'kernel_payload_bytes_identical':a['plain']['kernel_compressed_sha256']==a['ksu']['kernel_compressed_sha256'],
+              'kernel_decompressed_bytes_identical':a['plain']['kernel_decompressed_sha256']==a['ksu']['kernel_decompressed_sha256'],
+              'matches_users_reported_current_physwizz_boot_sha256':{n:d['boot_image_sha256']=='f4305284d770fcfb4e7393916aa0108b79ec3d3a4d3556fabf83276bd0364eb0' for n,d in a.items() if n!='comparison'},
+              'matches_original_stock_boot_sha256':{n:d['boot_image_sha256']=='0fa1f56be55b5f1c0aaac5855ee0ec9c1f388fe101202a13790b7694d48c20f9' for n,d in a.items() if n!='comparison'}
+          }
+          Path('report/official-release-boot-analysis.json').write_text(json.dumps(a,indent=2)+'\n')
+          print(json.dumps(a,indent=2))
+          assert all('6.6.89' in str(a[x]['kernel_version_strings']) for x in ('plain','ksu')), 'One release kernel is not expected 6.6.89; investigate'
+          PY
+      - name: Explicit compatibility and safety verdict
+        if: always()
+        run: |
+          cat > report/INTERPRETATION-AND-HOLD-GATES.txt <<'EOF'
+          THIS WORKFLOW IS READ-ONLY RESEARCH. NO BOOT IMAGE IS FLASHED OR MODIFIED.
+          Physwizz GitHub publishes 'V-UI' without the label 'KSU 0.9.5' and separately publishes 'V-UI-ksu' with 0.9.5 included.
+          The first release may be a clean *KSU-free* custom Physwizz boot image; a release name or absence of plain-text APatch signature is NOT proof that all other root patches were removed.
+          BOTH V-UI release TARs claim Android 15 binary I. The user's actual HEZB1 bootloader binary is H and current kernel release ends g6560c1ca1f00-dirty-physwizz.
+          Even if the extracted gzip kernel version exactly matches, a binary I boot image is not approved to flash on H without full header/DTB/AVB and firmware compatibility review, explicit user approval and verified Odin restoration.
+          The unchanged original Samsung init_boot is appropriate SOURCE ONLY for offline KernelSU Next LKM patch (if the appropriate KSU version/verified kernel module has been checked). It is not modified or flashed in this workflow.
+          To eliminate APatch/FolkPatch, we must pair a proven unpatched, device-compatible Physwizz boot kernel with an independently validated KSU Next init_boot early-loader; KSU late-load via FolkPatch root is not an independent migration.
+          The stock Samsung boot.img is NOT interchangeable with the custom Physwizz kernel and module.
+          Never attempt to relock bootloader with unsigned/mismatched custom images.
+          EOF
+      - name: Upload manifests ONLY (no images)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: A146P-Physwizz-plain-vs-KSU-boot-forensics-NOT-FLASHABLE
+          path: report/
+          if-no-files-found: warn
