@@ -1,0 +1,82 @@
+name: A146P 6.6.50 experimental KernelSU Next module compilation
+on:
+  push:
+    branches: [a146p-ksunext-stock-build]
+    paths: [.github/workflows/a146p-compile-experimental.yml]
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  compile:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install kernel compiler tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends git clang-18 llvm-18 lld-18 make gcc bc bison flex libelf-dev libssl-dev dwarves rsync python3 unzip zstd cpio
+      - name: Download Samsung source and pinned KernelSU Next
+        run: |
+          set -euo pipefail
+          mkdir -p w report out
+          curl -fLsS --retry 3 https://github.com/wiredroid/Patch-Recovery/releases/download/a146p-stock-source/SM-A146P_15_Opensource.1.zip -o w/samsung.zip
+          echo '7c7cd421d17f46138fe2a0c633882d96dcfa426b18593f4df52cbbd5823da197  w/samsung.zip' | sha256sum -c -
+          unzip -p w/samsung.zip Kernel.tar.gz | tar -xz -C w
+          git clone --no-checkout --filter=blob:none https://github.com/KernelSU-Next/KernelSU-Next.git w/ksunext
+          git -C w/ksunext fetch --depth=1 origin 159bc7da4266fd9331f63e25901629db4b7bfff8
+          git -C w/ksunext checkout --detach FETCH_HEAD
+          echo 'This Samsung source is Linux 6.6.50 but the installed stock firmware kernel is 6.6.89. Any module is an UNTESTED BUILD EXPERIMENT; NEVER FLASH/LOAD.' > report/NOT_FOR_FLASHING_OR_LOADING.txt
+          grep -E '^(VERSION|PATCHLEVEL|SUBLEVEL|EXTRAVERSION) ' w/kernel-6.6/Makefile | tee report/kernel-source-version.txt
+      - name: Build Samsung kernel to create real Module.symvers
+        run: |
+          set -euo pipefail
+          export PATH=/usr/lib/llvm-18/bin:$PATH
+          ROOT="$PWD"
+          KDIR="$ROOT/w/kernel-6.6"
+          OUT="$ROOT/w/kernel-out"
+          mkdir -p "$OUT"
+          make -C "$KDIR" O="$OUT" ARCH=arm64 LLVM=1 CC=clang LD=ld.lld gki_defconfig
+          "$KDIR/scripts/config" --file "$OUT/.config" -d AUTOFDO_CLANG -d PGO_CLANG -d PROPELLER_CLANG -d CFI_CLANG -d LTO_CLANG -e LTO_NONE -e MODULES -e MODVERSIONS
+          make -C "$KDIR" O="$OUT" ARCH=arm64 LLVM=1 CC=clang LD=ld.lld olddefconfig
+          grep -E 'CONFIG_(AUTOFDO|PGO_CLANG|PROPELLER_CLANG|CFI_CLANG|MODVERSIONS|LTO_NONE|ARM64_4K_PAGES|MODULES)' "$OUT/.config" | tee "$ROOT/report/config-checks.txt"
+          if grep -Eq '^CONFIG_(AUTOFDO_CLANG|PGO_CLANG|PROPELLER_CLANG)=y' "$OUT/.config"; then
+            echo 'ERROR AutoFDO still enabled after config update'; exit 5
+          fi
+          set +e
+          timeout 65m make -C "$KDIR" O="$OUT" ARCH=arm64 LLVM=1 CC=clang LD=ld.lld -j4 vmlinux > "$ROOT/report/kernel-compile.log" 2>&1
+          RC=$?
+          set -e
+          tail -n 100 "$ROOT/report/kernel-compile.log"
+          echo "Kernel compile exit: $RC"
+          test "$RC" -eq 0
+          test -s "$OUT/Module.symvers"
+          wc -l "$OUT/Module.symvers" | tee "$ROOT/report/symbol-count.txt"
+          cp "$OUT/Module.symvers" "$ROOT/report/Module.symvers.experimental"
+      - name: Compile KernelSU Next LKM with Samsung headers and symbols
+        run: |
+          set -euo pipefail
+          export PATH=/usr/lib/llvm-18/bin:$PATH
+          ROOT="$PWD"
+          KDIR="$ROOT/w/kernel-6.6"
+          OUT="$ROOT/w/kernel-out"
+          KSU="$ROOT/w/ksunext/kernel"
+          set +e
+          make -C "$KDIR" O="$OUT" M="$KSU" ARCH=arm64 LLVM=1 CC=clang LD=ld.lld CONFIG_KSU=m -j2 modules > "$ROOT/report/ksu-compile.log" 2>&1
+          RC=$?
+          set -e
+          tail -n 120 "$ROOT/report/ksu-compile.log"
+          echo "KSU compile exit: $RC"
+          test "$RC" -eq 0
+          test -s "$KSU/kernelsu.ko"
+          cp "$KSU/kernelsu.ko" "$ROOT/out/kernelsu-6.6.50-EXPERIMENTAL-NOT-FOR-LOADING.ko"
+          strings "$ROOT/out/"*.ko | grep '^vermagic=' | tee "$ROOT/report/vermagic.txt"
+          llvm-readelf -h "$ROOT/out/"*.ko | tee "$ROOT/report/ELF-header.txt"
+      - name: Publish diagnostics and explicitly untested module
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: a146p-experimental-6.6.50-build
+          path: |
+            report/
+            out/
+          if-no-files-found: error
