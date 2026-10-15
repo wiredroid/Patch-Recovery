@@ -1,7 +1,15 @@
 diff --git a/fs/f2fs/f2fs.h b/fs/f2fs/f2fs.h
 --- a/fs/f2fs/f2fs.h
 +++ b/fs/f2fs/f2fs.h
-@@ -1567,6 +1567,107 @@
+@@ -1169,6 +1169,7 @@
+ 	CP_NODE_NEED_CP,
+ 	CP_FASTBOOT_MODE,
+ 	CP_SPEC_LOG_NUM,
+ 	CP_RECOVER_DIR,
+ 	CP_XATTR_DIR,
++	NR_CP_REASON,
+ };
+@@ -1567,6 +1568,107 @@
  #define MAX_COMPRESS_LOG_SIZE		8
  #define MAX_COMPRESS_WINDOW_SIZE(log_size)	((PAGE_SIZE) << (log_size))
  
@@ -109,7 +117,7 @@ diff --git a/fs/f2fs/f2fs.h b/fs/f2fs/f2fs.h
  struct f2fs_sb_info {
  	struct super_block *sb;			/* pointer to VFS super block */
  	struct proc_dir_entry *s_proc;		/* proc entry */
-@@ -1664,6 +1765,7 @@
+@@ -1664,6 +1766,7 @@
  	block_t last_valid_block_count;		/* for recovery */
  	block_t reserved_blocks;		/* configurable reserved blocks */
  	block_t current_reserved_blocks;	/* current reserved blocks */
@@ -117,7 +125,7 @@ diff --git a/fs/f2fs/f2fs.h b/fs/f2fs/f2fs.h
  
  	/* Additional tracking for no checkpoint mode */
  	block_t unusable_block_count;		/* # of blocks saved by last cp */
-@@ -1696,6 +1798,7 @@
+@@ -1696,6 +1799,7 @@
  	unsigned int cur_victim_sec;		/* current victim section num */
  	unsigned int gc_mode;			/* current GC state */
  	unsigned int next_victim_seg[2];	/* next segment in victim section */
@@ -125,7 +133,7 @@ diff --git a/fs/f2fs/f2fs.h b/fs/f2fs/f2fs.h
  	spinlock_t gc_remaining_trials_lock;
  	/* remaining trial count for GC_URGENT_* and GC_IDLE_* */
  	unsigned int gc_remaining_trials;
-@@ -1750,6 +1853,8 @@
+@@ -1750,6 +1854,8 @@
  	/* to attach REQ_META|REQ_FUA flags */
  	unsigned int data_io_flag;
  	unsigned int node_io_flag;
@@ -134,7 +142,7 @@ diff --git a/fs/f2fs/f2fs.h b/fs/f2fs/f2fs.h
  
  	/* For sysfs support */
  	struct kobject s_kobj;			/* /sys/fs/f2fs/<devname> */
-@@ -1785,6 +1890,7 @@
+@@ -1785,6 +1891,7 @@
  	__u32 s_chksum_seed;
  
  	struct workqueue_struct *post_read_wq;	/* post read workqueue */
@@ -142,7 +150,7 @@ diff --git a/fs/f2fs/f2fs.h b/fs/f2fs/f2fs.h
  
  	/*
  	 * If we are in irq context, let's update error information into
-@@ -1847,6 +1953,42 @@
+@@ -1847,6 +1954,42 @@
  	spinlock_t iostat_lat_lock;
  	struct iostat_lat_info *iostat_io_lat;
  #endif
@@ -185,7 +193,7 @@ diff --git a/fs/f2fs/f2fs.h b/fs/f2fs/f2fs.h
  };
  
  /* Definitions to access f2fs_sb_info */
-@@ -1955,6 +2097,9 @@
+@@ -1955,6 +2098,9 @@
  	return wait_ms;
  }
  
