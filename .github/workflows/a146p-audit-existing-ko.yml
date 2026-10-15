@@ -1,0 +1,50 @@
+name: A146P audit compiled KernelSU module
+on:
+  push:
+    branches: [a146p-ksunext-stock-build]
+    paths: [.github/workflows/a146p-audit-existing-ko.yml]
+  workflow_dispatch:
+permissions:
+  actions: read
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 12
+    steps:
+      - name: Download previously compiled module artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: A146P-Physwizz-6.6.89-KSU-late-load-diagnostic
+          run-id: 38696880760
+          github-token: ${{ github.token }}
+          path: existing
+      - name: Validate ELF and audit all external symbol references
+        run: |
+          set -euo pipefail
+          mkdir -p results
+          KO=existing/out/a146p-physwizz-6.6.89-kernelsu-EXPERIMENTAL.ko
+          test -s "$KO"
+          echo '5cc15a04c736982c4e5d7a025c67920dcd9aa45957503f0d90405f3b038acf07  existing/out/a146p-physwizz-6.6.89-kernelsu-EXPERIMENTAL.ko' | sha256sum -c -
+          file "$KO" | tee results/elf-identification.txt
+          readelf -h "$KO" | tee results/elf-header.txt
+          readelf -p .modinfo "$KO" | tee results/module-info.txt
+          nm -u "$KO" | awk '{print $NF}' | sort -u > results/all-imports.txt
+          cp existing/report/not-exported-by-physwizz.txt results/not-exported-by-physwizz.txt
+          wc -l results/*.txt | tee results/import-count.txt
+          echo '== KernelSU Samsung compatibility features present in this binary =='
+          strings "$KO" | grep -E '(Samsung KDP credential compatibility|Samsung DEFEX compatibility enabled|Samsung RKP|Samsung DEFEX|CONFIG_KSU_SAMSUNG)' | tee results/samsung-feature-strings.txt || true
+          echo '== Version magic =='
+          strings "$KO" | grep '^vermagic=' | tee results/vermagic.txt
+          echo '== Missing exports requiring ksud custom kallsyms relocation =='
+          cat results/not-exported-by-physwizz.txt
+          echo '== Comparison to known Physwizz running version =='
+          echo 'Previously reported running: 6.6.89-android15-8-g6560c1ca1f00-dirty-physwizz' | tee results/target-runtime-info.txt
+          echo 'This is a static audit only: it cannot prove modules will load or initialize on physical Samsung devices.' | tee results/audit-limitations.txt
+      - name: Upload independent preflight report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: A146P-existing-KSU-ko-audit
+          path: results/
+          if-no-files-found: warn
