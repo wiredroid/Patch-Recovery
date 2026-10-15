@@ -2,7 +2,9 @@ name: A146P stock HEZB1 GKI89 reconstructed kernel build and ABI preflight
 on:
   push:
     branches: [a146p-ksunext-stock-build]
-    paths: [.github/workflows/a146p-stock-6.6.89-abi-build.yml]
+    paths:
+      - .github/workflows/a146p-stock-6.6.89-abi-build.yml
+      - 'a146p-stock/patches/**'
   workflow_dispatch:
 permissions:
   contents: read
