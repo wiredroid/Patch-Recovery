@@ -4,6 +4,7 @@
 # DO NOT use if you cannot recover an unbootable init_boot.
 set -Eeuo pipefail
 umask 077
+if command -v termux-wake-lock >/dev/null 2>&1; then termux-wake-lock || true; fi
 
 WORK="$HOME/a146p-migration"
 STAGE="/sdcard/Download/a146p-migration"
