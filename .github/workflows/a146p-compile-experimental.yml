@@ -57,6 +57,32 @@ jobs:
           wc -l "$OUT/Module.symvers" | tee "$ROOT/report/symbol-count.txt"
           cp "$OUT/Module.symvers" "$ROOT/report/Module.symvers.experimental"
           cp "$OUT/System.map" "$ROOT/report/System.map"
+      - name: Build Linux 6.6.50 kernel Image.gz for offline evaluation (NOT FLASHABLE)
+        run: |
+          set -euo pipefail
+          export PATH=/usr/lib/llvm-18/bin:$PATH
+          ROOT="$PWD"; KDIR="$ROOT/w/kernel-6.6"; OUT="$ROOT/w/kernel-out"
+          set +e
+          timeout 30m make -C "$KDIR" O="$OUT" ARCH=arm64 LLVM=1 CC=clang LD=ld.lld -j4 Image.gz > "$ROOT/report/kernel-image-build.log" 2>&1
+          RC=$?
+          set -e
+          tail -n 65 "$ROOT/report/kernel-image-build.log"
+          echo "Image.gz build status=$RC" | tee "$ROOT/report/kernel-image-status.txt"
+          if test "$RC" -eq 0 && test -s "$OUT/arch/arm64/boot/Image.gz"; then
+            cp "$OUT/arch/arm64/boot/Image.gz" "$ROOT/out/A146P-SAMSUNG-SOURCE-6.6.50-KERNEL-IMAGE-NOT-FOR-FLASHING.gz"
+            sha256sum "$ROOT/out/"*.gz | tee "$ROOT/report/kernel-image-sha256.txt"
+          else
+            echo 'No Image.gz produced. This does not necessarily prevent external module compilation.' > "$ROOT/report/kernel-image-blocker.txt"
+          fi
+      - name: Record firmware and early-boot compatibility limits
+        run: |
+          cat > report/DEVICE-MIGRATION-PRECONDITIONS.txt <<'EOF'
+          Samsung A146P Android15 GPL source Linux 6.6.50 only. Not shipping A146PXXUHEZB1 stock Linux 6.6.89.
+          This standalone kernel Image.gz is NOT a flashable Samsung boot.img; no exact matching boot image, DTB/DTBO, vendor modules, verified OEM signature, or on-device boot test was established.
+          Do NOT flash it or use its .ko on Linux 6.6.89.
+          FolkPatch/APatch root must remain until a verified independent KernelSU boot chain is proven.
+          Modifying boot/init_boot cannot preserve stock locked verified boot.
+          EOF
       - name: Compile KernelSU Next LKM with Samsung headers and symbols
         run: |
           set -euo pipefail
