@@ -1,0 +1,131 @@
+name: A146P Samsung cross-variant source reference audit
+on:
+  push:
+    branches: [a146p-ksunext-stock-build]
+    paths: [.github/workflows/a146p-cross-variant-source-triage.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  cross-variant-triage:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install git and GitHub CLI
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends git gh python3
+      - name: Get independently verified Samsung versus Google versus Physwizz SHA256 inventory
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p work/audit report
+          gh run download 38716664729 --repo wiredroid/Patch-Recovery --name A146P-44-Samsung-conflicts-Physwizz89-reference-REPORT --dir work/audit
+          test -s work/audit/44-conflict-physwizz-triage.tsv
+          test -s work/audit/full-Samsung-vendor-delta-physwizz-classifications.tsv
+          cp work/audit/44-conflict-physwizz-triage.tsv report/original-stock-port-44-references.tsv
+          python3 - <<'PY'
+          from pathlib import Path
+          import csv
+          files=[]
+          with Path('work/audit/44-conflict-physwizz-triage.tsv').open() as f:
+              files+=[row['path'] for row in csv.DictReader(f,delimiter='\t')]
+          with Path('work/audit/full-Samsung-vendor-delta-physwizz-classifications.tsv').open() as f:
+              files+=[row['path'] for row in csv.DictReader(f,delimiter='\t')]
+          files=sorted(set(files))
+          Path('report/all-reference-paths.txt').write_text('\n'.join(files)+'\n')
+          assert len(files)>=444
+          for directory,prefix in [('a145r','/kernel-6.6/'),('a146b','/')]:
+              paths=['/'+prefix.strip('/')+'/Makefile'] if prefix!='/ ' else ['/Makefile']
+              paths=[('/kernel-6.6/Makefile' if directory=='a145r' else '/Makefile')]
+              paths += [prefix.rstrip('/')+'/'+p for p in files]
+              Path('work/'+directory+'-sparse.txt').write_text('\n'.join(paths)+'\n')
+          print('Auditing:',len(files),'source paths across variant trees.')
+          PY
+      - name: Download only selected files from A14 4G MTK Linux 6.6.92 and A14 5G Exynos Linux 5.15.197
+        run: |
+          set -euo pipefail
+          git clone --filter=blob:none --depth=1 --no-checkout --branch main https://github.com/physwizz/A145r.git work/a145r
+          git clone --filter=blob:none --depth=1 --no-checkout --branch main https://github.com/physwizz/a146b-a146m.git work/a146b
+          for repo in a145r a146b; do
+            git -C "work/$repo" sparse-checkout init --no-cone
+            mapfile -t paths < "work/$repo-sparse.txt"
+            git -C "work/$repo" sparse-checkout set --no-cone "${paths[@]}"
+          done
+          for x in 'a145r 652449d2c4e9e18ec41a3c4277ab8b2230534878' 'a146b ca3d9d1620926dc7cc6efa1511d9d86a16683afd'; do
+            read -r name commit <<< "$x"
+            if test "$(git -C "work/$name" rev-parse HEAD)" != "$commit"; then
+              git -C "work/$name" fetch --depth=1 origin "$commit"
+            fi
+            git -C "work/$name" checkout -q --detach "$commit"
+            test "$(git -C "work/$name" rev-parse HEAD)" = "$commit"
+          done
+          grep -q '^SUBLEVEL = 92$' work/a145r/kernel-6.6/Makefile
+          grep -q '^VERSION = 5$' work/a146b/Makefile
+          grep -q '^PATCHLEVEL = 15$' work/a146b/Makefile
+          grep -q '^SUBLEVEL = 197$' work/a146b/Makefile
+          {
+            echo 'Reference-only, unofficial variant kernel repositories; NEVER rebase stock A146P against these wholesale.'
+            echo 'A145R Android15 MediaTek 4G kernel: Linux 6.6.92'
+            echo 'A146B/M Android15 Exynos 1330 kernel: Linux 5.15.197'
+            echo 'NO verified Snapdragon Galaxy A14 5G variant.'
+            echo "A145R reference commit: $(git -C work/a145r rev-parse HEAD)"
+            echo "Exynos reference commit: $(git -C work/a146b rev-parse HEAD)"
+          } > report/provenance-and-limitations.txt
+          cat report/provenance-and-limitations.txt
+      - name: Compare 44 source-merge conflicts against independent Samsung variants
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import csv,hashlib
+          from collections import Counter
+          with Path('work/audit/44-conflict-physwizz-triage.tsv').open() as f:
+              records=list(csv.DictReader(f,delimiter='\t'))
+          assert len(records)==44
+          roots={'A145R_MTK_6.6.92':Path('work/a145r/kernel-6.6'),'A146B_EXYNOS_5.15.197':Path('work/a146b')}
+          out=[];counts=Counter();selected=[]
+          def sha(root,rel):
+              path=root/rel
+              return hashlib.sha256(path.read_bytes()).hexdigest() if path.is_file() and not path.is_symlink() else 'ABSENT'
+          for row in records:
+              rel=row['path']
+              hashes={k:sha(v,rel) for k,v in roots.items()}
+              for name,val in hashes.items():
+                  if val=='ABSENT':kind='PATH_ABSENT'
+                  elif val==row['samsung50_sha256']:kind='MATCHES_SAMSUNG_A146P_6.6.50'
+                  elif val==row['google89_sha256']:kind='MATCHES_GOOGLE_GKI_6.6.89'
+                  elif val==row['physwizz89_sha256']:kind='MATCHES_A146P_PHYSWIZZ_6.6.89'
+                  else:kind='DIFFERENT_VERSION_OR_VENDOR_CODE'
+                  counts[(name,kind)]+=1
+                  out.append([rel,name,kind,val,row['classification']])
+                  if kind.startswith('MATCHES_'):
+                      selected.append('\t'.join([rel,name,kind]))
+          with Path('report/44-conflict-cross-variant-comparison.tsv').open('w') as f:
+              w=csv.writer(f,delimiter='\t')
+              w.writerow(['path','variant','classification','reference_sha256','original_physwizz_triage'])
+              w.writerows(out)
+          Path('report/PROMISING-EXACT-MATCHES.tsv').write_text('path\tvariant\trelation\n'+'\n'.join(selected)+'\n')
+          report=['44-file source conflict comparison against independent SAME-FAMILY Android 15 sources.',
+                  'SHA matching uses ORIGINAL A146P Samsung50, Google GKI89, and Physwizz89 reference SHA256 from successful run 38716664729.',
+                  'A145R is another phone (4G MediaTek). A146B is Exynos and 5.15; direct compatibility is not implied.',
+                  '',
+                  *[f'{k[0]} - {k[1]}: {n}' for k,n in sorted(counts.items())],
+                  '',
+                  f'EXACT MATCHES TO REFERENCE HASHES: {len(selected)}',
+                  'EXACT MATCH does not prove any code is present in actual Samsung A146PXXUHEZB1 stock kernel.']
+          Path('report/cross-variant-summary.txt').write_text('\n'.join(report)+'\n')
+          print('\n'.join(report))
+          PY
+          test -s report/cross-variant-summary.txt
+          test -s report/44-conflict-cross-variant-comparison.tsv
+      - name: Upload cross-variant evidence and prioritization
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: A146P-Exynos-and-MediaTek-variant-44-conflict-triage
+          path: report/
+          if-no-files-found: warn
