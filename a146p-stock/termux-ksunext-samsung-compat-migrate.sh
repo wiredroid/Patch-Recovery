@@ -38,8 +38,15 @@ COPY_INIT="$(sha256sum init_boot-current-backup.img | awk '{print $1}')"
 printf '\nInspecting patched state of extracted kernel and repacked boot...\n'
 ./kptools -l -i kernel > kernel-unpatch-check.txt || die "Cannot inspect extracted kernel."
 grep -q '^patched=false$' kernel-unpatch-check.txt || die "KernelPatch still detected in extracted kernel."
-./kptools -l -i clean-physwizz-candidate.img > boot-unpatch-check.txt || die "Cannot inspect repacked boot."
-grep -q '^patched=false$' boot-unpatch-check.txt || die "KernelPatch still detected in repacked boot."
+# kptools -l expects a kernel image, NOT an Android boot.img. Extract a fresh
+# copy from the repacked boot into a dedicated directory, then inspect it.
+mkdir -p repacked-boot-inspection
+rm -f repacked-boot-inspection/kernel
+(cd repacked-boot-inspection && "$WORK/kptools" unpack "$WORK/clean-physwizz-candidate.img") || die "Cannot extract kernel from repacked boot."
+[ -s repacked-boot-inspection/kernel ] || die "Repacked boot has no extractable kernel."
+cmp -s kernel repacked-boot-inspection/kernel || die "Repacked boot's extracted kernel differs from the unpatched candidate."
+./kptools -l -i repacked-boot-inspection/kernel > boot-unpatch-check.txt || die "Cannot inspect extracted repacked kernel."
+grep -q '^patched=false$' boot-unpatch-check.txt || die "KernelPatch still detected in repacked boot's extracted kernel."
 [ "$(sha256sum clean-physwizz-candidate.img | awk '{print $1}')" != "$COPY_BOOT" ] || die "Clean boot is byte-identical to FolkPatch boot."
 printf '\nDownloading Samsung RKP/DEFEX compatibility module...\n'
 PHASE="download/patch"
