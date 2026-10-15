@@ -1,0 +1,78 @@
+name: A146P Samsung 6.6.50 vendor delta against matching Google 6.6.50
+on:
+  push:
+    branches: [a146p-ksunext-stock-build]
+    paths: [.github/workflows/a146p-samsung-6.6.50-vendor-delta.yml]
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  matched-version-delta:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install archive and comparison tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends git curl unzip tar python3
+      - name: Download pinned original Samsung GPL and Google Android 15 Linux 6.6.50
+        run: |
+          set -euo pipefail
+          mkdir -p work report
+          curl -fL --retry 3 --retry-delay 3 \
+            https://github.com/wiredroid/Patch-Recovery/releases/download/a146p-stock-source/SM-A146P_15_Opensource.1.zip \
+            -o work/samsung.zip
+          echo '7c7cd421d17f46138fe2a0c633882d96dcfa426b18593f4df52cbbd5823da197  work/samsung.zip' | sha256sum -c -
+          unzip -p work/samsung.zip Kernel.tar.gz | tar -xz -C work
+          git clone --depth=1 --no-checkout https://android.googlesource.com/kernel/common.git work/google-6.6.50
+          git -C work/google-6.6.50 fetch --depth=1 origin 4cdfe8c8c40affb63caa5e2626b52b0f8d47eca9
+          git -C work/google-6.6.50 checkout --detach FETCH_HEAD
+          sed -n '1,8p' work/google-6.6.50/Makefile | tee report/google-50-version.txt
+          sed -n '1,8p' work/kernel-6.6/Makefile | tee report/samsung-50-version.txt
+          grep -q '^SUBLEVEL = 50$' work/google-6.6.50/Makefile
+          grep -q '^SUBLEVEL = 50$' work/kernel-6.6/Makefile
+          printf '%s\n' 'Google baseline: https://android.googlesource.com/kernel/common/+/4cdfe8c8c40affb63caa5e2626b52b0f8d47eca9' > report/official-source-commit.txt
+      - name: Inventory Samsung delta against SAME-version Google GKI
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib
+          from collections import Counter
+          vendor=Path('work/kernel-6.6')
+          google=Path('work/google-6.6.50')
+          def scan(base):
+              return {str(p.relative_to(base)):p for p in base.rglob('*') if p.is_file() and not p.is_symlink() and '.git' not in p.parts}
+          a=scan(vendor); b=scan(google)
+          common=a.keys()&b.keys()
+          only_vendor=sorted(a.keys()-b.keys())
+          only_google=sorted(b.keys()-a.keys())
+          modified=[]; ident=0
+          for p in sorted(common):
+              va,ga=a[p],b[p]
+              if va.stat().st_size==ga.stat().st_size and hashlib.sha256(va.read_bytes()).digest()==hashlib.sha256(ga.read_bytes()).digest(): ident+=1
+              else:modified.append(p)
+          for filename,contents in [('samsung-only-paths.txt',only_vendor),('google-only-paths.txt',only_google),('samsung-changed-shared-files.txt',modified)]:
+              Path('report',filename).write_text('\n'.join(contents)+'\n')
+          categories=Counter(p.split('/')[0] for p in modified+only_vendor)
+          Path('report/delta-by-subsystem.txt').write_text('\n'.join(f'{k}: {v}' for k,v in categories.most_common())+'\n')
+          security=[p for p in modified+only_vendor if p.startswith(('security/','include/linux/','drivers/staging/samsung/','kernel/','mm/','fs/'))]
+          Path('report/security-kernel-patch-candidates.txt').write_text('\n'.join(security)+'\n')
+          summary=(
+          'BASELINE-MATCHED source inventory, NOT an ABI compatibility guarantee.\n'
+          'Samsung 6.6.50 source compared to Google Android15 Linux 6.6.50 (Sept 2024 Android commit).\n'
+          f'Identical common files: {ident}\nModified shared files: {len(modified)}\nSamsung-only files: {len(only_vendor)}\nGoogle-only files: {len(only_google)}\n'
+          f'Security/kernel/mm/fs candidates: {len(security)}\n'
+          'Samsung 6.6.89 changes, boot ABI/module CRCs, and compatibility with A146PXXUHEZB1 are still unverified.\n'
+          )
+          Path('report/README.txt').write_text(summary)
+          print(summary)
+          print(Path('report/delta-by-subsystem.txt').read_text()[:1200])
+          PY
+      - name: Upload matched-version source-delta report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: Samsung-A146P-6.6.50-vs-matched-Google-6.6.50-delta
+          path: report/
+          if-no-files-found: warn
