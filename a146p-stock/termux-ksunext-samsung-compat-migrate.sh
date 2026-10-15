@@ -14,7 +14,7 @@ on_error() { local rc="$?"; printf '\nFAILED in %s (exit %s). If boot writes alr
 trap on_error ERR
 printf '\nA146P KernelSU Next v3.4.2: Samsung RKP/DEFEX Physwizz LKM candidate\n'
 printf 'This is an UNTESTED boot/ABI combination. --flash requires typed confirmation.\n\n'
-[ "\${1:-}" = "--flash" ] || die "Usage: bash script.sh --flash (requires typed confirmation)"
+[ "${1:-}" = "--flash" ] || die "Usage: bash script.sh --flash (requires typed confirmation)"
 [ "$(getprop ro.product.model)" = "SM-A146P" ] || die "Reported model is not SM-A146P."
 case "$(uname -r)" in 6.6.89*physwizz*) ;; *) die "Running kernel is not expected Physwizz 6.6.89.";; esac
 [ "$(getprop ro.build.version.release)" = "15" ] || die "Android version is not 15."
