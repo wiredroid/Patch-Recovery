@@ -1,4 +1,4 @@
-name: A146P 6.6.50 experimental KernelSU Next module compilation
+name: A146P Samsung 6.6.50 KernelSU Next independent experimental module
 on:
   push:
     branches: [a146p-ksunext-stock-build]
@@ -49,9 +49,14 @@ jobs:
           tail -n 100 "$ROOT/report/kernel-compile.log"
           echo "Kernel compile exit: $RC"
           test "$RC" -eq 0
-          test -s "$OUT/Module.symvers"
+          test -s "$OUT/vmlinux.symvers"
+          test -s "$OUT/System.map"
+          cp "$OUT/vmlinux.symvers" "$OUT/Module.symvers"
+          make -C "$KDIR" O="$OUT" ARCH=arm64 LLVM=1 CC=clang LD=ld.lld -j2 modules_prepare
+          test -s "$OUT/scripts/module.lds"
           wc -l "$OUT/Module.symvers" | tee "$ROOT/report/symbol-count.txt"
           cp "$OUT/Module.symvers" "$ROOT/report/Module.symvers.experimental"
+          cp "$OUT/System.map" "$ROOT/report/System.map"
       - name: Compile KernelSU Next LKM with Samsung headers and symbols
         run: |
           set -euo pipefail
@@ -61,7 +66,7 @@ jobs:
           OUT="$ROOT/w/kernel-out"
           KSU="$ROOT/w/ksunext/kernel"
           set +e
-          make -C "$KDIR" O="$OUT" M="$KSU" ARCH=arm64 LLVM=1 CC=clang LD=ld.lld CONFIG_KSU=m -j2 modules > "$ROOT/report/ksu-compile.log" 2>&1
+          make -C "$KDIR" O="$OUT" M="$KSU" ARCH=arm64 LLVM=1 CC=clang LD=ld.lld CONFIG_KSU=m CONFIG_KSU_SAMSUNG_RKP=y CONFIG_KSU_SAMSUNG_DEFEX=y CONFIG_KSU_SAMSUNG_NO_PATCH_TEXT=y CONFIG_KSU_SAMSUNG_KDP=n KBUILD_MODPOST_WARN=1 -j2 modules > "$ROOT/report/ksu-compile.log" 2>&1
           RC=$?
           set -e
           tail -n 120 "$ROOT/report/ksu-compile.log"
@@ -71,6 +76,14 @@ jobs:
           cp "$KSU/kernelsu.ko" "$ROOT/out/kernelsu-6.6.50-EXPERIMENTAL-NOT-FOR-LOADING.ko"
           strings "$ROOT/out/"*.ko | grep '^vermagic=' | tee "$ROOT/report/vermagic.txt"
           llvm-readelf -h "$ROOT/out/"*.ko | tee "$ROOT/report/ELF-header.txt"
+          nm -u "$ROOT/out/kernelsu-6.6.50-EXPERIMENTAL-NOT-FOR-LOADING.ko" | awk '{print $NF}' | sort -u > "$ROOT/report/module-imports.txt"
+          awk '{print $3}' "$OUT/System.map" | sort -u > "$ROOT/report/kernel-symbols.txt"
+          comm -23 "$ROOT/report/module-imports.txt" "$ROOT/report/kernel-symbols.txt" > "$ROOT/report/not-present-in-built-kernel.txt"
+          awk '{print $2}' "$OUT/Module.symvers" | sort -u > "$ROOT/report/kernel-exports.txt"
+          comm -23 "$ROOT/report/module-imports.txt" "$ROOT/report/kernel-exports.txt" > "$ROOT/report/non-exported-imports.txt"
+          wc -l "$ROOT/report/module-imports.txt" "$ROOT/report/not-present-in-built-kernel.txt" "$ROOT/report/non-exported-imports.txt" | tee "$ROOT/report/import-counts.txt"
+          test ! -s "$ROOT/report/not-present-in-built-kernel.txt"
+          sha256sum "$ROOT/out/kernelsu-6.6.50-EXPERIMENTAL-NOT-FOR-LOADING.ko" | tee "$ROOT/report/module-sha256.txt"
       - name: Publish diagnostics and explicitly untested module
         if: always()
         uses: actions/upload-artifact@v4
