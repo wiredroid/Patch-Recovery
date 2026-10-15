@@ -1,0 +1,96 @@
+name: A146P KernelSU Next experimental LKM build
+on:
+  push:
+    branches: [a146p-ksunext-stock-build]
+    paths:
+      - .github/workflows/a146p-ksu-build.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  build:
+    name: Compile against Samsung Android 15 kernel sources
+    runs-on: ubuntu-24.04
+    timeout-minutes: 105
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install build prerequisites
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends build-essential clang-18 lld-18 llvm-18 flex bison bc libssl-dev libelf-dev dwarves cpio rsync python3 python3-pip unzip zstd
+      - name: Download and unpack verified Samsung source
+        run: |
+          set -euo pipefail
+          mkdir -p work/samsung work/report
+          curl -fL --retry 3 https://github.com/wiredroid/Patch-Recovery/releases/download/a146p-stock-source/SM-A146P_15_Opensource.1.zip -o work/samsung.zip
+          echo '7c7cd421d17f46138fe2a0c633882d96dcfa426b18593f4df52cbbd5823da197  work/samsung.zip' | sha256sum -c -
+          unzip -p work/samsung.zip README_Kernel.txt | tee work/report/README_Kernel.txt
+          unzip -p work/samsung.zip Kernel.tar.gz > work/kernel.tar.gz
+          tar -xzf work/kernel.tar.gz -C work/samsung
+          echo '== kernel candidates and config/symbols ==' | tee work/report/source-discovery.txt
+          find work/samsung -name Module.symvers -o -name .config -o -name build.config -o -name Makefile | grep -E 'symvers|config|kernel-6.6/Makefile|common/Makefile' | head -n 140 | tee -a work/report/source-discovery.txt || true
+          echo '== samsung build script ==' | tee -a work/report/source-discovery.txt
+          sed -n '1,160p' work/samsung/build_kernel.sh | tee -a work/report/source-discovery.txt
+          echo '== disk ==' | tee -a work/report/source-discovery.txt
+          df -h . | tee -a work/report/source-discovery.txt
+      - name: Fetch pinned KernelSU Next module source
+        run: |
+          set -euo pipefail
+          mkdir -p work/ksunext
+          git -C work/ksunext init
+          git -C work/ksunext remote add origin https://github.com/KernelSU-Next/KernelSU-Next.git
+          git -C work/ksunext fetch --depth=1 origin 159bc7da4266fd9331f63e25901629db4b7bfff8
+          git -C work/ksunext checkout --detach FETCH_HEAD
+          git -C work/ksunext rev-parse HEAD | tee work/report/ksunext-commit.txt
+      - name: Build Samsung kernel and export Module.symvers if necessary
+        continue-on-error: true
+        run: |
+          set -uo pipefail
+          export PATH="/usr/lib/llvm-18/bin:$PATH"
+          echo '== toolchain ==' | tee work/report/build-kernel.log
+          clang --version | head -n 2 | tee -a work/report/build-kernel.log
+          echo '== running Samsung official build script ==' | tee -a work/report/build-kernel.log
+          cd work/samsung
+          timeout 65m bash ./build_kernel.sh >> ../report/build-kernel.log 2>&1
+          result=$?
+          echo "Samsung build exit status=$result" | tee -a ../report/build-kernel.log
+          find . ../ -name Module.symvers -type f -printf '%s %p\n' | head -n 40 | tee ../report/symvers-found.txt
+          exit "$result"
+      - name: Attempt KSU LKM with prepared symbols
+        continue-on-error: true
+        run: |
+          set -uo pipefail
+          export PATH="/usr/lib/llvm-18/bin:$PATH"
+          mkdir -p work/out
+          KSUDIR="$PWD/work/ksunext/kernel"
+          echo "ksu kernel directory: $KSUDIR" | tee work/report/module-build.log
+          mapfile -t SYMVERS < <(find "$PWD/work/samsung" -name Module.symvers -type f -size +0c 2>/dev/null)
+          if [ "${#SYMVERS[@]}" -eq 0 ]; then
+            echo "No populated Module.symvers produced; cannot safely link a CONFIG_MODVERSIONS module." | tee -a work/report/module-build.log
+            exit 3
+          fi
+          for S in "${SYMVERS[@]}"; do
+            KDIR="$(dirname "$S")"
+            if [ -e "$KDIR/Makefile" ] && [ -e "$KDIR/.config" ]; then
+              echo "Attempt using KDIR=$KDIR" | tee -a work/report/module-build.log
+              make -C "$KDIR" M="$KSUDIR" ARCH=arm64 LLVM=1 LLVM_IAS=1 CC=clang LD=ld.lld CONFIG_KSU=m modules -j2 >> work/report/module-build.log 2>&1 && break
+            fi
+          done
+          if [ -f "$KSUDIR/kernelsu.ko" ]; then
+            cp "$KSUDIR/kernelsu.ko" work/out/a146p-experimental-kernelsu.ko
+            llvm-readelf -h work/out/*.ko | tee work/report/module-elf.txt
+            strings work/out/*.ko | grep -E 'vermagic=|6.6.89|6.6.127' | tee work/report/module-vermagic.txt || true
+            echo 'UNTESTED: NOT FOR FLASHING' | tee work/report/NOT_FLASHABLE.txt
+          else
+            echo 'No compatible module produced in this run.' | tee -a work/report/module-build.log
+            exit 4
+          fi
+      - name: Upload build diagnostics and any experimental module
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: a146p-stock-ksunext-build-results
+          path: |
+            work/report/
+            work/out/
+          if-no-files-found: warn
