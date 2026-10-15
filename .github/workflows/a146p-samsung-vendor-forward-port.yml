@@ -1,0 +1,105 @@
+name: A146P port matched Samsung 6.6.50 delta onto official Google 6.6.89
+on:
+  push:
+    branches: [a146p-ksunext-stock-build]
+    paths: [.github/workflows/a146p-samsung-vendor-forward-port.yml]
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  port:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install source port tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends git curl unzip tar python3
+      - name: Fetch ONLY genuine Samsung GPL and official Google Linux baselines
+        run: |
+          set -euo pipefail
+          mkdir -p work report
+          curl -fL --retry 3 --retry-delay 2 -o work/samsung.zip 'https://github.com/wiredroid/Patch-Recovery/releases/download/a146p-stock-source/SM-A146P_15_Opensource.1.zip'
+          echo '7c7cd421d17f46138fe2a0c633882d96dcfa426b18593f4df52cbbd5823da197  work/samsung.zip' | sha256sum -c -
+          mkdir -p work/samsung
+          unzip -p work/samsung.zip Kernel.tar.gz | tar -xz -C work/samsung
+          test -f work/samsung/kernel-6.6/Makefile
+          grep -q '^SUBLEVEL = 50$' work/samsung/kernel-6.6/Makefile
+          git clone --depth=1 --branch android15-6.6-2025-06_r1 https://android.googlesource.com/kernel/common.git work/google
+          grep -q '^SUBLEVEL = 89$' work/google/Makefile
+          git -C work/google rev-parse HEAD > report/google-6.6.89-commit.txt
+          git -C work/google fetch --depth=1 origin 4cdfe8c8c40affb63caa5e2626b52b0f8d47eca9
+          git -C work/google checkout --detach FETCH_HEAD
+          grep -q '^SUBLEVEL = 50$' work/google/Makefile
+          git -C work/google rev-parse HEAD > report/google-6.6.50-commit.txt
+      - name: Isolate Samsung 6.6.50 changes against Google 6.6.50
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          from shutil import copy2
+          import hashlib
+          samsung=Path('work/samsung/kernel-6.6')
+          google=Path('work/google')
+          def files(d):
+              return {str(p.relative_to(d)):p for p in d.rglob('*') if p.is_file() and not p.is_symlink() and '.git' not in p.parts}
+          a,b=files(samsung),files(google)
+          changed=[];added=[];identical=0
+          for rel,src in a.items():
+              if rel in b:
+                  dst=b[rel]
+                  if src.stat().st_size==dst.stat().st_size and hashlib.sha256(src.read_bytes()).digest()==hashlib.sha256(dst.read_bytes()).digest():
+                      identical+=1
+                      continue
+                  changed.append(rel)
+              else:added.append(rel)
+              dst=google/rel
+              dst.parent.mkdir(parents=True,exist_ok=True)
+              copy2(src,dst)
+          Path('report/modified-6.6.50-Samsung-files.txt').write_text('\n'.join(sorted(changed))+'\n')
+          Path('report/Samsung-only-files.txt').write_text('\n'.join(sorted(added))+'\n')
+          summary=f'Identical Samsung/Google 6.6.50: {identical}\nSamsung-modified shared: {len(changed)}\nSamsung-added: {len(added)}\n'
+          Path('report/base-match-summary.txt').write_text(summary)
+          print(summary)
+          PY
+          git -C work/google add -A
+          git -C work/google diff --cached --binary > report/Samsung-6.6.50-vs-Google-6.6.50.patch
+          test -s report/Samsung-6.6.50-vs-Google-6.6.50.patch
+          git -C work/google diff --cached --stat > report/vendor-delta-stat.txt
+          wc -l report/Samsung-6.6.50-vs-Google-6.6.50.patch
+          sha256sum report/Samsung-6.6.50-vs-Google-6.6.50.patch > report/vendor-patch-sha256.txt
+      - name: Attempt three-way port to official Google Android15 6.6.89 (no Physwizz)
+        run: |
+          set -euo pipefail
+          git -C work/google reset --hard
+          git -C work/google clean -ffd
+          git -C work/google checkout --detach "$(cat report/google-6.6.89-commit.txt)"
+          grep -q '^SUBLEVEL = 89$' work/google/Makefile
+          set +e
+          git -C work/google apply --3way --index --verbose "$PWD/report/Samsung-6.6.50-vs-Google-6.6.50.patch" > report/forward-port.log 2>&1
+          rc=$?
+          set -e
+          cat report/forward-port.log | tail -n 85
+          echo "GIT_APPLY_EXIT=$rc" | tee report/port-status.txt
+          git -C work/google status --short > report/post-port-status.txt
+          git -C work/google diff --name-only --diff-filter=U > report/merge-conflicts.txt
+          git -C work/google ls-files -u > report/unmerged-entries.txt
+          git -C work/google diff --cached --name-only > report/applied-staged-files.txt
+          git -C work/google diff --name-only > report/unstaged-differences.txt
+          printf 'Unmerged files: '; wc -l < report/merge-conflicts.txt
+          printf 'Staged paths: '; wc -l < report/applied-staged-files.txt
+          head -n 55 report/merge-conflicts.txt
+          cat > report/NOT-A-STOCK-FIRMWARE-BUILD.txt <<'EOF'
+          EXPERIMENTAL SOURCE RECONSTRUCTION ONLY.
+          Applying Samsung 6.6.50 changes to Google 6.6.89 is a proposed port, not evidence that Samsung's A146PXXUHEZB1 6.6.89 vendor changes or export CRCs match.
+          This job intentionally does not create a boot image, flash an image, or claim compatibility with a locked Samsung bootloader.
+          A three-way merge may leave conflicts requiring manual engineering, and zero conflicts does NOT prove a bootable or stock-ABI-equivalent kernel.
+          EOF
+          exit "$rc"
+      - name: Upload Samsung-only delta, port results and conflicts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: A146P-GKI-6.6.89-Samsung50-forward-port-RESEARCH
+          path: report/
+          if-no-files-found: warn
