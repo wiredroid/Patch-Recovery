@@ -109,15 +109,7 @@ jobs:
             echo 'Unmerged Git index entries remain after partial-port checkpoint.'
             exit 13
           fi
-          grep -q '^SUBLEVEL = 89
-      - name: Upload Samsung-only delta, port results and conflicts
-        if: always()
-        uses: actions/upload-artifact@v4
-        with:
-          name: A146P-GKI-6.6.89-Samsung50-forward-port-RESEARCH
-          path: report/
-          if-no-files-found: warn
- work/google/Makefile
+          grep -q '^SUBLEVEL = 89$' work/google/Makefile
           test -f work/google/security/samsung/defex_lsm/Kconfig
           test -f work/google/include/linux/defex.h
           git -C work/google diff --cached --binary > report/CONSERVATIVE-PARTIAL-Samsung50-on-GKI89.patch
