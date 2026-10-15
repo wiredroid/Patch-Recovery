@@ -324,7 +324,7 @@ diff --git a/fs/f2fs/super.c b/fs/f2fs/super.c
 diff --git a/include/linux/f2fs_fs.h b/include/linux/f2fs_fs.h
 --- a/include/linux/f2fs_fs.h
 +++ b/include/linux/f2fs_fs.h
-@@ -601,5 +601,18 @@
+@@ -601,4 +601,17 @@
  
  #define	F2FS_DEF_PROJID		0	/* default project ID */
  
@@ -342,4 +342,3 @@ diff --git a/include/linux/f2fs_fs.h b/include/linux/f2fs_fs.h
 +	__u8   rsvd[4020];
 +} __packed;
  #endif  /* _LINUX_F2FS_FS_H */
- 
