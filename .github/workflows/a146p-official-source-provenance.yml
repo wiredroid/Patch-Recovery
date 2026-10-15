@@ -1,0 +1,100 @@
+name: A146P official Samsung + Google 6.6.89 source provenance
+on:
+  push:
+    branches: [a146p-ksunext-stock-build]
+    paths:
+      - .github/workflows/a146p-official-source-provenance.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  compare-sources:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 55
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install source analysis tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends git curl unzip tar xz-utils python3
+      - name: Acquire OFFICIAL Android 15 6.6.89 source (not Physwizz)
+        run: |
+          set -euo pipefail
+          mkdir -p work report
+          git clone --depth=1 --branch android15-6.6-2025-06_r1 \
+            https://android.googlesource.com/kernel/common.git work/android-gki-6.6.89
+          sed -n '1,9p' work/android-gki-6.6.89/Makefile | tee report/google-source-version.txt
+          grep -q '^SUBLEVEL = 89$' work/android-gki-6.6.89/Makefile
+          git -C work/android-gki-6.6.89 rev-parse HEAD | tee report/google-source-commit.txt
+          git -C work/android-gki-6.6.89 show -s --format=fuller HEAD | tee report/google-source-provenance.txt
+          echo 'Official GKI source: https://android.googlesource.com/kernel/common/+/refs/tags/android15-6.6-2025-06_r1' > report/google-source-url.txt
+      - name: Acquire Samsung GPL source for A146P Android 15 and inspect its provenance
+        run: |
+          set -euo pipefail
+          ROOT="$PWD"
+          curl --retry 4 --retry-delay 3 -fL \
+            'https://github.com/wiredroid/Patch-Recovery/releases/download/a146p-stock-source/SM-A146P_15_Opensource.1.zip' \
+            -o work/SM-A146P_15_Opensource.1.zip
+          echo '7c7cd421d17f46138fe2a0c633882d96dcfa426b18593f4df52cbbd5823da197  work/SM-A146P_15_Opensource.1.zip' | sha256sum -c -
+          unzip -Z1 work/SM-A146P_15_Opensource.1.zip | tee report/samsung-archive-member-list.txt
+          unzip -p work/SM-A146P_15_Opensource.1.zip Kernel.tar.gz > work/Samsung-Kernel.tar.gz
+          mkdir -p work/samsung-kernel
+          tar -xzf work/Samsung-Kernel.tar.gz -C work/samsung-kernel
+          find work/samsung-kernel -maxdepth 4 -name Makefile | head -n 25 | tee report/samsung-makefile-locations.txt
+          python3 - <<'PY'
+          from pathlib import Path
+          base=Path('work/samsung-kernel')
+          kernels=[]
+          for p in base.rglob('Makefile'):
+              if len(p.parts)>10:continue
+              s=p.read_text(errors='replace')[:500]
+              if 'VERSION = 6' in s and 'PATCHLEVEL = 6' in s:
+                  kernels.append((p,s.splitlines()[:8]))
+          with open('report/samsung-version.txt','w') as f:
+              for p,txt in kernels:
+                  f.write(str(p)+'\n'+'\n'.join(txt)+'\n')
+          print(Path('report/samsung-version.txt').read_text()[:1600])
+          if not kernels:raise Exception('No Linux 6.6 Samsung Makefile found')
+          PY
+      - name: Compare official 6.6.50 vendor kernel tree to 6.6.89 Google base
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import hashlib
+          root=Path('work/samsung-kernel')
+          candidates=[]
+          for p in root.rglob('Makefile'):
+              if len(p.parts)>10:continue
+              lines=p.read_text(errors='replace')[:250]
+              if 'VERSION = 6' in lines and 'PATCHLEVEL = 6' in lines and 'SUBLEVEL = 50' in lines:candidates.append(p.parent)
+          if not candidates:raise Exception('Cannot find Samsung 6.6.50 kernel root')
+          vendor=min(candidates,key=lambda v:len(v.parts))
+          gki=Path('work/android-gki-6.6.89')
+          def scan(base):
+              return {str(p.relative_to(base)):p for p in base.rglob('*') if p.is_file() and '.git' not in p.parts}
+          a=scan(vendor);b=scan(gki)
+          common=a.keys()&b.keys()
+          only_samsung=sorted(a.keys()-b.keys())
+          only_google=sorted(b.keys()-a.keys())
+          changed=[];identical=0
+          for path in sorted(common):
+              f1,f2=a[path],b[path]
+              if f1.stat().st_size==f2.stat().st_size and hashlib.sha256(f1.read_bytes()).digest()==hashlib.sha256(f2.read_bytes()).digest():identical+=1
+              else:changed.append(path)
+          Path('report/samsung-private-file-list.txt').write_text('\n'.join(only_samsung)+'\n')
+          Path('report/android-6.6.89-only-file-list.txt').write_text('\n'.join(only_google)+'\n')
+          Path('report/samsung-google-changed-file-list.txt').write_text('\n'.join(changed)+'\n')
+          summary=f'Samsung source root: {vendor}\nGoogle source: {gki}\nCommon same: {identical}\nCommon different: {len(changed)}\nSamsung only: {len(only_samsung)}\nGoogle only: {len(only_google)}\n'
+          summary+='These are two DIFFERENT versioned source trees. This inventory is not a clean patch series. Exact Samsung 6.6.89 vendor changes and matching stock Module.symvers are still missing.\n'
+          Path('report/source-inventory-summary.txt').write_text(summary)
+          print(summary)
+          print('Samsung-specific examples:',only_samsung[:30])
+          PY
+      - name: Upload source comparison and provenance
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: A146P-official-Samsung50-versus-Google89-source-audit
+          path: report/
+          if-no-files-found: warn
