@@ -46,8 +46,9 @@ jobs:
           base=Path('work/samsung-kernel')
           kernels=[]
           for p in base.rglob('Makefile'):
-              if len(p.parts)>10:continue
-              s=p.read_text(errors='replace')[:500]
+              if len(p.parts)>10 or p.is_symlink() or not p.is_file():continue
+              try: s=p.read_text(errors='replace')[:500]
+              except (FileNotFoundError, OSError):continue
               if 'VERSION = 6' in s and 'PATCHLEVEL = 6' in s:
                   kernels.append((p,s.splitlines()[:8]))
           with open('report/samsung-version.txt','w') as f:
@@ -65,14 +66,15 @@ jobs:
           root=Path('work/samsung-kernel')
           candidates=[]
           for p in root.rglob('Makefile'):
-              if len(p.parts)>10:continue
-              lines=p.read_text(errors='replace')[:250]
+              if len(p.parts)>10 or p.is_symlink() or not p.is_file():continue
+              try: lines=p.read_text(errors='replace')[:250]
+              except (FileNotFoundError, OSError):continue
               if 'VERSION = 6' in lines and 'PATCHLEVEL = 6' in lines and 'SUBLEVEL = 50' in lines:candidates.append(p.parent)
           if not candidates:raise Exception('Cannot find Samsung 6.6.50 kernel root')
           vendor=min(candidates,key=lambda v:len(v.parts))
           gki=Path('work/android-gki-6.6.89')
           def scan(base):
-              return {str(p.relative_to(base)):p for p in base.rglob('*') if p.is_file() and '.git' not in p.parts}
+              return {str(p.relative_to(base)):p for p in base.rglob('*') if p.is_file() and not p.is_symlink() and '.git' not in p.parts}
           a=scan(vendor);b=scan(gki)
           common=a.keys()&b.keys()
           only_samsung=sorted(a.keys()-b.keys())
