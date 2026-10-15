@@ -1,0 +1,89 @@
+name: A146P Physwizz 6.6.89 KernelSU Next experimental LKM
+on:
+  push:
+    branches: [a146p-ksunext-stock-build]
+    paths: [.github/workflows/a146p-physwizz-6.6.89-lkm.yml]
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  build:
+    name: Physwizz 6.6.89 source / pinned KernelSU Next
+    runs-on: ubuntu-24.04
+    timeout-minutes: 110
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Linux kernel build prerequisites
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends git make gcc clang-18 llvm-18 lld-18 bc bison flex libssl-dev libelf-dev dwarves cpio rsync python3 zstd
+      - name: Fetch exact Physwizz source revision and pinned KernelSU Next
+        run: |
+          set -euo pipefail
+          mkdir -p work out report
+          git clone --depth=1 https://github.com/physwizz/a146p.git work/physwizz
+          test "$(git -C work/physwizz rev-parse HEAD)" = '6560c1ca1f009dd3e53b698245bf2df1b9804e03'
+          git clone --filter=blob:none --no-checkout https://github.com/KernelSU-Next/KernelSU-Next.git work/ksunext
+          git -C work/ksunext fetch --depth=1 origin 159bc7da4266fd9331f63e25901629db4b7bfff8
+          git -C work/ksunext checkout --detach FETCH_HEAD
+          grep -E '^(VERSION|PATCHLEVEL|SUBLEVEL|EXTRAVERSION) ' work/physwizz/kernel-6.6/Makefile | tee report/kernel-source-version.txt
+          grep '^CONFIG_LOCALVERSION=' work/physwizz/kernel-6.6/arch/arm64/configs/gki_defconfig | tee report/source-localversion.txt
+          printf '%s\n' 'Experimental build for Physwizz kernel only; a 6.6.89 source version is not proof of ABI compatibility with original Samsung boot.img' > report/BUILD_IS_UNTESTED.txt
+      - name: Compile Physwizz kernel exports
+        run: |
+          set -euo pipefail
+          export PATH=/usr/lib/llvm-18/bin:$PATH
+          ROOT="$PWD"
+          SRCTREE="$ROOT/work/physwizz/kernel-6.6"
+          OUT="$ROOT/work/physwizz-out"
+          mkdir -p "$OUT"
+          make -C "$SRCTREE" O="$OUT" ARCH=arm64 LLVM=1 CC=clang LD=ld.lld gki_defconfig
+          "$SRCTREE/scripts/config" --file "$OUT/.config" -d AUTOFDO_CLANG -d PGO_CLANG -d PROPELLER_CLANG -e MODULES -e MODVERSIONS
+          make -C "$SRCTREE" O="$OUT" ARCH=arm64 LLVM=1 CC=clang LD=ld.lld olddefconfig
+          make -s -C "$SRCTREE" O="$OUT" ARCH=arm64 LLVM=1 CC=clang LD=ld.lld kernelrelease | tee "$ROOT/report/kernelrelease.txt"
+          grep -E '(LOCALVERSION|AUTOFDO|CFI_CLANG|MODVERSIONS|LTO_NONE|LTO_CLANG_THIN|ARM64_4K_PAGES)' "$OUT/.config" | tee "$ROOT/report/build-config.txt"
+          set +e
+          timeout 80m make -C "$SRCTREE" O="$OUT" ARCH=arm64 LLVM=1 CC=clang LD=ld.lld -j4 vmlinux > "$ROOT/report/kernel-build.log" 2>&1
+          RC=$?
+          set -e
+          tail -n 75 "$ROOT/report/kernel-build.log"
+          echo "Kernel compilation result=$RC"
+          if [ "$RC" -ne 0 ]; then exit "$RC"; fi
+          if [ -s "$OUT/Module.symvers" ]; then
+            echo 'Kernel provided Module.symvers'
+          elif [ -s "$OUT/vmlinux.symvers" ]; then
+            cp "$OUT/vmlinux.symvers" "$OUT/Module.symvers"
+            echo 'Copied vmlinux.symvers to Module.symvers for external module modpost'
+          else
+            echo 'Missing both Module.symvers and vmlinux.symvers'
+            exit 9
+          fi
+          wc -l "$OUT/Module.symvers" | tee "$ROOT/report/kernel-export-count.txt"
+      - name: Build KernelSU Next LKM against Physwizz exported symbols
+        run: |
+          set -euo pipefail
+          export PATH=/usr/lib/llvm-18/bin:$PATH
+          ROOT="$PWD"
+          SRCTREE="$ROOT/work/physwizz/kernel-6.6"
+          OUT="$ROOT/work/physwizz-out"
+          KSU="$ROOT/work/ksunext/kernel"
+          set +e
+          make -C "$SRCTREE" O="$OUT" M="$KSU" ARCH=arm64 LLVM=1 CC=clang LD=ld.lld CONFIG_KSU=m -j2 modules > "$ROOT/report/ksu-build.log" 2>&1
+          RC=$?
+          set -e
+          tail -n 125 "$ROOT/report/ksu-build.log"
+          echo "KSU module compilation result=$RC"
+          if [ "$RC" -ne 0 ]; then exit "$RC"; fi
+          test -s "$KSU/kernelsu.ko"
+          cp "$KSU/kernelsu.ko" "$ROOT/out/a146p-physwizz-6.6.89-kernelsu-EXPERIMENTAL.ko"
+          strings "$ROOT/out/"*.ko | grep -E '^vermagic=' | tee "$ROOT/report/module-vermagic.txt"
+          llvm-readelf -h "$ROOT/out/"*.ko | tee "$ROOT/report/module-elf.txt"
+          sha256sum "$ROOT/out/"*.ko | tee "$ROOT/report/module-sha256.txt"
+      - name: Upload diagnostic logs and any experimental module
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: A146P-Physwizz-6.6.89-KSU-experimental
+          path: |
+            report/
+            out/
+          if-no-files-found: error
