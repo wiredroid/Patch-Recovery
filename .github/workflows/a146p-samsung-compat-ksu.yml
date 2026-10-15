@@ -1,0 +1,106 @@
+name: A146P Samsung-hardened KernelSU Next LKM candidate
+on:
+  push:
+    branches: [a146p-ksunext-stock-build]
+    paths: [.github/workflows/a146p-samsung-compat-ksu.yml]
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  build:
+    name: Physwizz 6.6.89 + Samsung RKP DEFEX compatibility
+    runs-on: ubuntu-24.04
+    timeout-minutes: 110
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Clang and Kbuild prerequisites
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends git make gcc clang-18 llvm-18 lld-18 bc bison flex libssl-dev libelf-dev dwarves cpio rsync python3 zstd
+      - name: Fetch pinned sources
+        run: |
+          set -euo pipefail
+          mkdir -p work report out
+          git clone --depth=1 https://github.com/physwizz/a146p.git work/physwizz
+          test "$(git -C work/physwizz rev-parse HEAD)" = 6560c1ca1f009dd3e53b698245bf2df1b9804e03
+          git clone --no-checkout --filter=blob:none https://github.com/KernelSU-Next/KernelSU-Next.git work/ksunext
+          git -C work/ksunext fetch --depth=1 origin 159bc7da4266fd9331f63e25901629db4b7bfff8
+          git -C work/ksunext checkout --detach FETCH_HEAD
+          printf '%s\n' 'PHYSWIZZ 6.6.89 experimental build. NO DEVICE BOOT OR ROOT TESTS WERE PERFORMED.' > report/UNTESTED-DEVICE.txt
+      - name: Prepare and build kernel ELF symbol map
+        run: |
+          set -euo pipefail
+          export PATH=/usr/lib/llvm-18/bin:$PATH
+          ROOT="$PWD"; SRC="$ROOT/work/physwizz/kernel-6.6"; OUT="$ROOT/work/out-physwizz"
+          mkdir -p "$OUT"
+          make -C "$SRC" O="$OUT" ARCH=arm64 LLVM=1 CC=clang LD=ld.lld gki_defconfig
+          "$SRC/scripts/config" --file "$OUT/.config" -d AUTOFDO_CLANG -d PGO_CLANG -d PROPELLER_CLANG -e MODULES -e MODVERSIONS
+          make -C "$SRC" O="$OUT" ARCH=arm64 LLVM=1 CC=clang LD=ld.lld olddefconfig
+          make -s -C "$SRC" O="$OUT" ARCH=arm64 LLVM=1 CC=clang LD=ld.lld kernelrelease | tee "$ROOT/report/built-kernelrelease.txt"
+          set +e
+          timeout 80m make -C "$SRC" O="$OUT" ARCH=arm64 LLVM=1 CC=clang LD=ld.lld -j4 vmlinux > "$ROOT/report/kernel-build.log" 2>&1
+          code=$?
+          set -e
+          tail -n 55 "$ROOT/report/kernel-build.log"
+          test "$code" -eq 0
+          test -s "$OUT/vmlinux.symvers"
+          test -s "$OUT/System.map"
+          cp "$OUT/vmlinux.symvers" "$OUT/Module.symvers"
+          make -C "$SRC" O="$OUT" ARCH=arm64 LLVM=1 CC=clang LD=ld.lld -j2 modules_prepare
+          test -s "$OUT/scripts/module.lds"
+          cp "$OUT/System.map" "$ROOT/report/System.map"
+          echo "Symbols listed: $(wc -l < "$OUT/System.map")" | tee "$ROOT/report/kernel-symbol-count.txt"
+      - name: Build Samsung hardening compatibility variant
+        run: |
+          set -euo pipefail
+          export PATH=/usr/lib/llvm-18/bin:$PATH
+          ROOT="$PWD"; SRC="$ROOT/work/physwizz/kernel-6.6"; OUT="$ROOT/work/out-physwizz"
+          KSU="$ROOT/work/ksunext/kernel"
+          {
+            echo CONFIG_KSU=m
+            echo CONFIG_KSU_SAMSUNG_RKP=y
+            echo CONFIG_KSU_SAMSUNG_DEFEX=y
+            echo CONFIG_KSU_SAMSUNG_NO_PATCH_TEXT=y
+            echo CONFIG_KSU_SAMSUNG_KDP=n
+          } | tee "$ROOT/report/ksu-compat-flags.txt"
+          echo 'KDP is deliberately not enabled without verifying the required KDP helpers are present in this model.'
+          set +e
+          make -C "$SRC" O="$OUT" M="$KSU" ARCH=arm64 LLVM=1 CC=clang LD=ld.lld \
+            CONFIG_KSU=m CONFIG_KSU_SAMSUNG_RKP=y CONFIG_KSU_SAMSUNG_DEFEX=y \
+            CONFIG_KSU_SAMSUNG_NO_PATCH_TEXT=y CONFIG_KSU_SAMSUNG_KDP=n \
+            KBUILD_MODPOST_WARN=1 -j2 modules > "$ROOT/report/ksu-compat-build.log" 2>&1
+          code=$?
+          set -e
+          tail -n 95 "$ROOT/report/ksu-compat-build.log"
+          test "$code" -eq 0
+          test -s "$KSU/kernelsu.ko"
+          cp "$KSU/kernelsu.ko" "$ROOT/out/ksu-next-physwizz-6.6.89-samsung-compat-UNTESTED.ko"
+          strings "$ROOT/out/"*.ko | grep '^vermagic=' | tee "$ROOT/report/vermagic.txt"
+          strings "$ROOT/out/"*.ko | grep -E '(Samsung DEFEX compatibility enabled|Samsung RKP|kprobe-based syscall)' | tee "$ROOT/report/compat-feature-strings.txt" || true
+          sha256sum "$ROOT/out/"*.ko | tee "$ROOT/report/module-sha256.txt"
+      - name: Audit external imports against full vmlinux symbol map
+        run: |
+          set -euo pipefail
+          KO=out/ksu-next-physwizz-6.6.89-samsung-compat-UNTESTED.ko
+          nm -u "$KO" | awk '{print $NF}' | sort -u > report/all-module-imports.txt
+          awk '{print $3}' report/System.map | sed -E 's/(\\$.*|\\.llvm\\..*)$//' | sort -u > report/all-kernel-symbols.txt
+          comm -23 report/all-module-imports.txt report/all-kernel-symbols.txt > report/not-in-kernel-System.map.txt
+          awk '{print $2}' work/out-physwizz/Module.symvers | sort -u > report/kernel-exports.txt
+          comm -23 report/all-module-imports.txt report/kernel-exports.txt > report/non-exported-imports.txt
+          echo '== KSU import counts =='
+          wc -l report/all-module-imports.txt report/non-exported-imports.txt report/not-in-kernel-System.map.txt
+          echo '== Symbols entirely absent from this build of Physwizz kernel =='
+          cat report/not-in-kernel-System.map.txt
+          if test -s report/not-in-kernel-System.map.txt; then
+            echo 'FAIL: some imports do not exist even in this built kernel; cannot resolve through kallsyms.' | tee report/COMPATIBILITY-BLOCKER.txt
+            exit 12
+          fi
+          echo 'PASS: all direct imports appear in rebuilt Physwizz vmlinux/System.map (still untested on device).' | tee report/symbol-presence.txt
+      - name: Upload binary and full diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: A146P-Physwizz-6.6.89-Samsung-compat-UNTESTED
+          path: |
+            report/
+            out/
+          if-no-files-found: warn
