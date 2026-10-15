@@ -50,6 +50,17 @@ jobs:
           grep -q '__u32 is_cache;' work/google89/fs/f2fs/f2fs.h
           grep -q '__u32 is_force_cold;' work/google89/fs/f2fs/f2fs.h
           sha256sum "$ML_STREAM_PORT" > report/SAMSUNG-F2FS-ML-STREAM-PATCH-SHA256.txt
+          # Restore Samsung's GPL F2FS filesystem-statistic and extra-fsck-block
+          # definitions and their actual implementation, retaining GKI89 code.
+          # Verified against original stock BTF for f2fs_sb_info and nested types.
+          F2FS_SEC_PORT="$PWD/a146p-stock/patches/0003-f2fs-samsung-stat-and-fsck-block-integration.patch"
+          test -s "$F2FS_SEC_PORT"
+          git -C work/google89 apply --check "$F2FS_SEC_PORT"
+          git -C work/google89 apply "$F2FS_SEC_PORT"
+          grep -q 'struct f2fs_sec_stat_info' work/google89/fs/f2fs/f2fs.h
+          grep -q 'void f2fs_get_fsck_stat(' work/google89/fs/f2fs/super.c
+          grep -q 'struct f2fs_sb_extra_flag_blk' work/google89/include/linux/f2fs_fs.h
+          sha256sum "$F2FS_SEC_PORT" > report/SAMSUNG-F2FS-FSCK-STATS-PATCH-SHA256.txt
           cat > report/stock-BTF-F2FS-ML-layout-anchor.tsv <<'EOF'
           struct_name\tstock_size_bytes\tmember\tstock_byte_offset
           f2fs_inode_info\t1440\tis_cache\t1384
