@@ -41,6 +41,20 @@ jobs:
           git -C work/google89 apply --check "$F2FS_PORT"
           git -C work/google89 apply "$F2FS_PORT"
           grep -q 'static inline void print_block_data' work/google89/fs/f2fs/f2fs.h
+          # Retain GKI89's inode layout extensions; restore only the Samsung
+          # ML-stream fields confirmed in the original A146PXXUHEZB1 stock BTF.
+          ML_STREAM_PORT="$PWD/a146p-stock/patches/0002-f2fs-restore-stock-confirmed-ml-stream-inode-fields.patch"
+          test -s "$ML_STREAM_PORT"
+          git -C work/google89 apply --check "$ML_STREAM_PORT"
+          git -C work/google89 apply "$ML_STREAM_PORT"
+          grep -q '__u32 is_cache;' work/google89/fs/f2fs/f2fs.h
+          grep -q '__u32 is_force_cold;' work/google89/fs/f2fs/f2fs.h
+          sha256sum "$ML_STREAM_PORT" > report/SAMSUNG-F2FS-ML-STREAM-PATCH-SHA256.txt
+          cat > report/stock-BTF-F2FS-ML-layout-anchor.tsv <<'EOF'
+          struct_name\tstock_size_bytes\tmember\tstock_byte_offset
+          f2fs_inode_info\t1440\tis_cache\t1384
+          f2fs_inode_info\t1440\tis_force_cold\t1424
+          EOF
           sha256sum "$F2FS_PORT" > report/SAMSUNG-F2FS-HELPER-PATCH-SHA256.txt
           git -C work/google89 diff -- fs/f2fs/f2fs.h > report/SAMSUNG-F2FS-HELPER-applied-header.diff
           grep -R -n --include='*.c' 'ignore_fs_panic' work/google89/fs work/google89/drivers > report/ignore_fs_panic-C-references.txt || true
