@@ -13,7 +13,7 @@ Two equal goals:
 ## GitHub worksite & tooling
 - Repository: https://github.com/wiredroid/Patch-Recovery
 - Work **ONLY** on branch `a146p-ksunext-stock-build`, leave `main` untouched: https://github.com/wiredroid/Patch-Recovery/tree/a146p-ksunext-stock-build
-- HEAD at handoff: `52b0bc4a7f2d470c2ac2740cbd3df0982cfcbd88` (verify HEAD again before edits).
+- Last research commit before the handoff: `52b0bc4a7f2d470c2ac2740cbd3df0982cfcbd88`; the handoff document was committed afterward. Verify current branch HEAD before edits.
 - Connected GitHub app via available tools named `mcp__GitHub__fetch`, `fetch_file`, `update_file`, `create_file`, `fetch_workflow_run_jobs`, `fetch_workflow_job_logs`, and `fetch_workflow_run_artifacts` (available under `functions.exec`). Prefer connector for repo files, CI and workflows.
 - GitHub Actions workflow definitions in `.github/workflows/a146p-*.yml`; current stock compilation `.github/workflows/a146p-stock-6.6.89-abi-build.yml`. Use logs *and* attached diagnostics; success of YAML workflow is not source/ABI proof.
 
