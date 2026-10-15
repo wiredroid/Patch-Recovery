@@ -1,0 +1,81 @@
+name: A146P compare 44 Samsung conflicts with real MediaTek Galaxy A34 GKI 6.6.89 source
+on:
+  push:
+    branches: [a146p-ksunext-stock-build]
+    paths: [.github/workflows/a146p-a34-6.6.89-stock-reference.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  source-triangulation:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download prior 44-conflict audit with stock Samsung and Physwizz checksums
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p work/prior report
+          gh run download 38716664729 --repo wiredroid/Patch-Recovery --name A146P-44-Samsung-conflicts-Physwizz89-reference-REPORT --dir work/prior
+          test -s work/prior/44-conflict-physwizz-triage.tsv
+          test "$(($(wc -l < work/prior/44-conflict-physwizz-triage.tsv)-1))" -eq 44
+      - name: Retrieve pinned real Samsung Galaxy A34 MediaTek Android15 GKI 6.6.89 via sparse checkout
+        run: |
+          set -euo pipefail
+          mkdir -p work/a34
+          git -C work/a34 init -q
+          git -C work/a34 remote add origin https://github.com/Fede2782/kernel_samsung_mediatek_common.git
+          git -C work/a34 config core.sparseCheckout true
+          git -C work/a34 sparse-checkout init --no-cone
+          { printf '%s\n' Makefile; tail -n +2 work/prior/44-conflict-physwizz-triage.tsv | cut -f1; } > report/sparse-source-paths.txt
+          git -C work/a34 sparse-checkout set --no-cone --stdin < report/sparse-source-paths.txt
+          git -C work/a34 -c protocol.version=2 fetch -q --depth=1 --filter=blob:none origin 6dfa2540bbfd95ed6475933f4b6f925c6a644e6c
+          git -C work/a34 checkout -q --detach FETCH_HEAD
+          test "$(git -C work/a34 rev-parse HEAD)" = 6dfa2540bbfd95ed6475933f4b6f925c6a644e6c
+          grep -q '^SUBLEVEL = 89$' work/a34/Makefile
+          echo 'A34 source: https://github.com/Fede2782/kernel_samsung_mediatek_common/tree/6dfa2540bbfd95ed6475933f4b6f925c6a644e6c' > report/reference-provenance.txt
+          echo 'Repository is renamed from android_kernel_mediatek_common, referenced by A34 kernel build release v1.0.5-dyf4-2025-06 submodule.' >> report/reference-provenance.txt
+          echo 'DIFFERENT DEVICE (SM-A346B); reference only; not a substitute for actual Samsung SM-A146P stock source.' >> report/reference-provenance.txt
+      - name: Compare A34 6.6.89 file checksums with A146P Samsung50, Google89, Physwizz89
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          import csv,hashlib
+          from collections import Counter
+          inp=Path('work/prior/44-conflict-physwizz-triage.tsv')
+          rows=list(csv.DictReader(inp.open(),delimiter='\t'))
+          assert len(rows)==44
+          output=[]; counts=Counter(); distinct=Counter()
+          for r in rows:
+              fn=r['path']; file=Path('work/a34')/fn
+              hash=hashlib.sha256(file.read_bytes()).hexdigest() if file.is_file() and not file.is_symlink() else 'ABSENT'
+              if hash=='ABSENT': cls='A34_SOURCE_FILE_ABSENT'
+              elif hash==r['gki89_sha256']: cls='A34_MATCHES_GOOGLE89'
+              elif hash==r['samsung50_sha256']: cls='A34_MATCHES_SAMSUNG50'
+              elif hash==r['physwizz89_sha256']: cls='A34_MATCHES_PHYSWIZZ89'
+              else: cls='A34_DISTINCT'
+              rr=dict(r);rr['a34_6.6.89_sha256']=hash;rr['a34_relation']=cls
+              output.append(rr);counts[cls]+=1
+              if r['classification']=='PHYSWIZZ_DISTINCT_NEEDS_SEMANTIC_REVIEW': distinct[cls]+=1
+          with open('report/A146P-44-conflicts-vs-A34-6.6.89.tsv','w',newline='') as f:
+              wr=csv.DictWriter(f,fieldnames=list(output[0]),delimiter='\t')
+              wr.writeheader();wr.writerows(output)
+          print('ALL 44 CONFLICTS:')
+          print(*[f'  {k}: {v}' for k,v in counts.most_common()],sep='\n')
+          print('26 PHYSWIZZ-DISTINCT FILES:')
+          print(*[f'  {k}: {v}' for k,v in distinct.most_common()],sep='\n')
+          summary='A34 (MT6877), not A146P (MT6833); reference-only code comparison; no boot or module ABI proof.\n' + 'All 44:\n' + '\n'.join(f'{k}: {v}' for k,v in counts.most_common()) + '\n26 Physwizz-distinct:\n' + '\n'.join(f'{k}: {v}' for k,v in distinct.most_common()) + '\n'
+          Path('report/SUMMARY.txt').write_text(summary)
+          Path('report/26-DISTINCT-priority-files.txt').write_text('\n'.join(r['path']+'  '+r['a34_relation'] for r in output if r['classification']=='PHYSWIZZ_DISTINCT_NEEDS_SEMANTIC_REVIEW')+'\n')
+          PY
+      - name: Upload checksum evidence and semantic port source candidates
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: A146P-44-conflicts-compare-A34-MediaTek-GKI89-reference
+          path: report/
+          if-no-files-found: warn
