@@ -67,13 +67,20 @@ jobs:
           OUT="$ROOT/work/physwizz-out"
           KSU="$ROOT/work/ksunext/kernel"
           set +e
-          make -C "$SRCTREE" O="$OUT" M="$KSU" ARCH=arm64 LLVM=1 CC=clang LD=ld.lld CONFIG_KSU=m -j2 modules > "$ROOT/report/ksu-build.log" 2>&1
+          make -C "$SRCTREE" O="$OUT" M="$KSU" ARCH=arm64 LLVM=1 CC=clang LD=ld.lld CONFIG_KSU=m KBUILD_MODPOST_WARN=1 -j2 modules > "$ROOT/report/ksu-build.log" 2>&1
           RC=$?
           set -e
           tail -n 125 "$ROOT/report/ksu-build.log"
           echo "KSU module compilation result=$RC"
           if [ "$RC" -ne 0 ]; then exit "$RC"; fi
           test -s "$KSU/kernelsu.ko"
+          llvm-nm --undefined-only "$KSU/kernelsu.ko" | awk '{print $NF}' | sort -u > "$ROOT/report/undefined-module-symbols.txt"
+          awk '{print $2}' "$OUT/Module.symvers" | sort -u > "$ROOT/report/kernel-exported-symbols.txt"
+          comm -23 "$ROOT/report/undefined-module-symbols.txt" "$ROOT/report/kernel-exported-symbols.txt" > "$ROOT/report/not-exported-by-physwizz.txt"
+          wc -l "$ROOT/report/undefined-module-symbols.txt" "$ROOT/report/not-exported-by-physwizz.txt"
+          if test -s "$ROOT/report/not-exported-by-physwizz.txt"; then
+            echo "Non-exported kernel symbols remain: experimental late-load only, NOT conventional insmod." | tee "$ROOT/report/UNRESOLVED-EXPORTS.txt"
+          fi
           cp "$KSU/kernelsu.ko" "$ROOT/out/a146p-physwizz-6.6.89-kernelsu-EXPERIMENTAL.ko"
           strings "$ROOT/out/"*.ko | grep -E '^vermagic=' | tee "$ROOT/report/module-vermagic.txt"
           llvm-readelf -h "$ROOT/out/"*.ko | tee "$ROOT/report/module-elf.txt"
@@ -82,7 +89,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: A146P-Physwizz-6.6.89-KSU-experimental
+          name: A146P-Physwizz-6.6.89-KSU-late-load-diagnostic
           path: |
             report/
             out/
