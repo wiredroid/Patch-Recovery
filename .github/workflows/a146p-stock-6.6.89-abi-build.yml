@@ -33,7 +33,151 @@ jobs:
           echo '32eceb687814b50c00326822097b233f2b8e9520028bc76a91e7f30e956fd3b7  work/port-audit/CONSERVATIVE-PARTIAL-Samsung50-on-GKI89.patch' | sha256sum -c -
           git -C work/google89 apply --check "$PWD/work/port-audit/CONSERVATIVE-PARTIAL-Samsung50-on-GKI89.patch"
           git -C work/google89 apply "$PWD/work/port-audit/CONSERVATIVE-PARTIAL-Samsung50-on-GKI89.patch"
-          grep -q '^SUBLEVEL = 89$' work/google89/Makefile
+          # Source-level repair, not a build-flag suppression: this restores Samsung's
+          # directory-corruption hex-dump helper into the otherwise retained GKI89 F2FS header.
+          # The implementation was compared against Samsung GPL A146P50 and pinned
+          # MediaTek A146P89/A145R92 references. NOT proven identical to HEZB1 stock.
+          F2FS_PORT="$PWD/a146p-stock/patches/0001-f2fs-restore-samsung-corruption-dump-helper.patch"
+          test -s "$F2FS_PORT"
+          git -C work/google89 apply --check "$F2FS_PORT"
+          git -C work/google89 apply "$F2FS_PORT"
+          grep -q 'static inline void print_block_data' work/google89/fs/f2fs/f2fs.h
+          sha256sum "$F2FS_PORT" > report/SAMSUNG-F2FS-HELPER-PATCH-SHA256.txt
+          git -C work/google89 diff -- fs/f2fs/f2fs.h > report/SAMSUNG-F2FS-HELPER-applied-header.diff
+          # Audit declaration AND definition of the Samsung shutdown guard before linking.
+          grep -R -n --include='*.c' 'ignore_fs_panic' work/google89/fs work/google89/drivers > report/ignore_fs_panic-C-references.txt || true
+          echo 'F2FS helper is a research source port only; not a stock ABI or boot validation.' > report/SAMSUNG-F2FS-SOURCE-PORT-NOTICE.txt
+          grep -q '^SUBLEVEL = 89
+          test -f work/google89/include/linux/defex.h
+          test -f work/google89/security/samsung/defex_lsm/Kconfig
+          git -C work/google89 status --porcelain > report/partial-source-working-tree-status.txt
+          cat > report/STOCK-IMAGE-HASH-GATE.txt <<'EOF'
+          Target handset firmware SM-A146P A146PXXUHEZB1, stock Linux 6.6.89-android15-8-abA146PXXUHEZB1-4k.
+          ORIGINAL BOOT SHA256 0fa1f56be55b5f1c0aaac5855ee0ec9c1f388fe101202a13790b7694d48c20f9
+          ORIGINAL INIT_BOOT SHA256 a514ef26365ff0e92871e74d2e87f1da5a4461e4e40e0b7d4cebdf72a18d4976
+          Exact hashes indicate bit-for-bit IDENTICAL original OEM image bytes. They are not proof of source equivalence.
+          This build intentionally does not modify, reconstruct, or claim hash equality for those original Samsung-signed images.
+          Stock boot/init_boot bytes have NOT been uploaded to GitHub for this workflow; no comparison against their bytes is made.
+          Adding KernelSU to boot/init_boot necessarily changes the hash and fails locked Samsung verified boot unless signed by trusted OEM keys.
+          The new research image from this source, if any, is NEVER a Samsung-certified stock replacement.
+          EOF
+      - name: Resolve actual stock IKCONFIG against Samsung partial-GKI89 tree and quantify drift
+        run: |
+          set -euo pipefail
+          export PATH=/usr/lib/llvm-18/bin:$PATH
+          ROOT="$PWD"
+          OUT="$ROOT/work/build"
+          KDIR="$ROOT/work/google89"
+          mkdir -p "$OUT"
+          cp a146p-stock/stock-A146PXXUHEZB1-6.6.89.config "$OUT/.config"
+          cp "$OUT/.config" report/original-stock-IKCONFIG.txt
+          make -C "$KDIR" O="$OUT" ARCH=arm64 LLVM=1 CC=clang LD=ld.lld olddefconfig > report/olddefconfig.log 2>&1
+          cp "$OUT/.config" report/resolved-GKI89-partial-stock-config.txt
+          python3 - <<'PY'
+          from pathlib import Path
+          def parse(path):
+              a={}
+              for s in Path(path).read_text().splitlines():
+                  if s.startswith('CONFIG_') and '=' in s:
+                      k,v=s.split('=',1);a[k]=v
+                  elif s.startswith('# CONFIG_') and s.endswith(' is not set'):
+                      a[s[2:-11]]='n'
+              return a
+          target=parse('report/original-stock-IKCONFIG.txt')
+          new=parse('report/resolved-GKI89-partial-stock-config.txt')
+          absent=sorted(k for k in target if k not in new)
+          mismatched=sorted((k,target[k],new[k]) for k in target if k in new and new[k]!=target[k])
+          Path('report/CONFIG-missing-from-candidate.txt').write_text('\n'.join(absent)+'\n')
+          Path('report/CONFIG-drift.tsv').write_text('option\tstock\tcandidate\n'+'\n'.join('\t'.join(v) for v in mismatched)+'\n')
+          counts=(f'Stock explicit options: {len(target)}\nCandidates resolved: {len(new)}\n'
+                  f'Options absent: {len(absent)}\nOptions different: {len(mismatched)}\n'
+                  'Even if this step passes, candidate is NOT stock ABI equivalent, and 44 vendor conflict paths remain unresolved.\n')
+          Path('report/CONFIG-drift-summary.txt').write_text(counts)
+          print(counts)
+          for k in ['CONFIG_ARM64_4K_PAGES','CONFIG_MODVERSIONS','CONFIG_DEBUG_INFO_BTF','CONFIG_SECURITY_DEFEX','CONFIG_SAMSUNG_GKI_KERNEL','CONFIG_LTO_NONE']:
+              print(k,'stock=',target.get(k),'candidate=',new.get(k))
+          PY
+      - name: Substitute local development module-signing key ONLY for research build
+        run: |
+          set -euo pipefail
+          export PATH=/usr/lib/llvm-18/bin:$PATH
+          ROOT="$PWD"; KDIR="$ROOT/work/google89"; OUT="$ROOT/work/build"
+          grep '^CONFIG_MODULE_SIG_KEY=' "$OUT/.config" | tee report/OEM-MODULE-SIGNING-KEY-REQUIREMENT.txt
+          if grep -q 'DEVICE_MODULES_REL_DIR.*/certs/mtk_signing_key.pem' "$OUT/.config"; then
+            "$KDIR/scripts/config" --file "$OUT/.config" --set-str MODULE_SIG_KEY certs/signing_key.pem
+            make -C "$KDIR" O="$OUT" ARCH=arm64 LLVM=1 CC=clang LD=ld.lld olddefconfig > report/research-only-dev-key-olddefconfig.log 2>&1
+            echo 'RESEARCH BUILD ONLY: substituted ephemeral self-signed signing key for inaccessible OEM private MediaTek signing key. Any resulting signatures differ from stock; not compatible with locked OEM verified boot.' > report/RESEARCH-MODULE-SIGNATURE-NOT-STOCK.txt
+            grep '^CONFIG_MODULE_SIG_KEY=' "$OUT/.config" | tee report/RESEARCH-KEY-CONFIG.txt
+          else
+            echo 'No known private MTK module signing key path found. No substitution performed.' > report/RESEARCH-MODULE-SIGNATURE-NOT-STOCK.txt
+          fi
+      - name: Compile vmlinux of PARTIAL 6.6.89 source (not a flashable image)
+        run: |
+          set -euo pipefail
+          export PATH=/usr/lib/llvm-18/bin:$PATH
+          ROOT="$PWD"
+          KDIR="$ROOT/work/google89"
+          OUT="$ROOT/work/build"
+          set +e
+          timeout 75m make -C "$KDIR" O="$OUT" ARCH=arm64 LLVM=1 CC=clang LD=ld.lld -j4 vmlinux > report/compile-vmlinux.log 2>&1
+          rc=$?
+          set -e
+          echo "VMLINUX_COMPILE_EXIT=$rc" | tee report/vmlinux-status.txt
+          echo 'FIRST compiler errors and context, preserving actual root cause:'
+          grep -n -m 35 -E 'error:|fatal:|No rule to make target|No such file or directory|undefined reference' report/compile-vmlinux.log || true
+          tail -n 45 report/compile-vmlinux.log
+          test "$rc" -eq 0
+          test -s "$OUT/vmlinux"
+          test -s "$OUT/System.map"
+          sha256sum "$OUT/vmlinux" | tee report/vmlinux-sha256.txt
+          wc -c "$OUT/vmlinux" | tee report/vmlinux-size.txt
+          if test -s "$OUT/vmlinux.symvers"; then
+            cp "$OUT/vmlinux.symvers" report/CANDIDATE-vmlinux.symvers
+            wc -l "$OUT/vmlinux.symvers" | tee report/kernel-symbol-count.txt
+          fi
+      - name: Compare rebuilt kernel BTF declarations against EXACT Samsung stock struct sizes
+        run: |
+          set -euo pipefail
+          OUT="$PWD/work/build"
+          cat > report/stock-BTF-expected-sizes.tsv <<'EOF'
+          name	stock_size_bytes
+          task_struct	4800
+          cred	184
+          file	264
+          f2fs_sb_info	5992
+          f2fs_inode_info	1440
+          f2fs_super_block	3072
+          f2fs_checkpoint	192
+          defex_context	88
+          EOF
+          mkdir -p report/pahole-structs
+          while IFS="$(printf '\t')" read -r name stock_size; do
+            test "$name" != name || continue
+            pahole -C "$name" "$OUT/vmlinux" > "report/pahole-structs/$name.txt" 2> "report/pahole-structs/$name.errors" || true
+          done < report/stock-BTF-expected-sizes.tsv
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          out=['name\tstock_size\tcandidate_size\tcomparison']
+          for line in Path('report/stock-BTF-expected-sizes.tsv').read_text().splitlines()[1:]:
+              name,expected=line.split('\t')
+              txt=Path(f'report/pahole-structs/{name}.txt').read_text()
+              hits=re.findall(r'/\*\s*size:\s*(\d+)',txt)
+              got=hits[-1] if hits else 'NOT_EXTRACTED'
+              state='SIZE_MATCH_ONLY' if got==expected else 'UNVERIFIED_OR_MISMATCH'
+              out.append(f'{name}\t{expected}\t{got}\t{state}')
+          Path('report/STOCK-BTF-vs-CANDIDATE-size-audit.tsv').write_text('\n'.join(out)+'\n')
+          print('\n'.join(out))
+          PY
+          echo 'SIZE_MATCH_ONLY is NOT proof that full member offsets, structure layouts, function behavior, symbol CRCs, or stock firmware signatures match.' > report/BTF-AUDIT-NOTICE.txt
+      - name: Upload all diagnostics whether compilation passes or fails
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: A146P-stock-HEZB1-partial-GKI89-ABI-PREFLIGHT-NOT-FLASHABLE
+          path: report/
+          if-no-files-found: warn
+ work/google89/Makefile
           test -f work/google89/include/linux/defex.h
           test -f work/google89/security/samsung/defex_lsm/Kconfig
           git -C work/google89 status --porcelain > report/partial-source-working-tree-status.txt
