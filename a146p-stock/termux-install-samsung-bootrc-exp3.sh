@@ -21,7 +21,8 @@ printf '\nA146P KernelSU Next Samsung boot RC EXP3 — UNTESTED, can cause a boo
 [ "$(getprop ro.build.version.release)" = "15" ] || fatal "Not Android 15"
 case "$(uname -r)" in 6.6.89*physwizz*) ;; *) fatal "Not expected Physwizz kernel";; esac
 [ -s "$WORK/original-init_boot.img" ] && [ -s "$WORK/output/init_boot-samsung-compat.img" ] && [ -x "$WORK/ksud" ] || fatal "Original init_boot, running init_boot backup, or ksud missing."
-for cmd in curl unzip sha256sum awk grep sed dd stat cmp cp sleep su sync head; do command -v "$cmd" >/dev/null || fatal "Missing $cmd (install it in Termux first)"; done
+for cmd in curl sha256sum awk grep sed dd stat cmp cp sleep su sync head wc; do command -v "$cmd" >/dev/null || fatal "Missing $cmd (install it in Termux first)"; done
+if ! command -v unzip >/dev/null 2>&1; then pkg install -y unzip || fatal "Could not install unzip"; fi
 printf '%s  %s\n' "$ORIG_INIT_SHA" "$WORK/original-init_boot.img" | sha256sum -c - || fatal "Stock init_boot hash mismatch."
 su -c id | grep -q 'uid=0' || fatal "No root available."
 LIVE_BOOT="$(su -c 'sha256sum /dev/block/by-name/boot' | awk '{print $1}')"
@@ -35,7 +36,7 @@ cp "$WORK/output/init_boot-samsung-compat.img" "$STAGE/init_boot-before-bootrc.i
 printf '\nWaiting for exact GitHub Actions run %s to PASS (up to 60 minutes)...\n' "$RUN_ID"
 PHASE="wait for CI"
 passed=0
-for ((i=0; i<120; i++)); do
+for ((i=0; i<60; i++)); do
     result="$(curl -fLsS --connect-timeout 12 --max-time 25 --retry 2 -H 'Accept: application/vnd.github+json' "https://api.github.com/repos/$REPO/actions/runs/$RUN_ID")" || fatal "Could not check CI status."
     if printf '%s' "$result" | grep -Eq '"conclusion"[[:space:]]*:[[:space:]]*"success"'; then
         passed=1
@@ -44,13 +45,18 @@ for ((i=0; i<120; i++)); do
     if printf '%s' "$result" | grep -Eq '"conclusion"[[:space:]]*:[[:space:]]*"(failure|cancelled|timed_out|skipped|action_required)"'; then
         fatal "GitHub Actions CI failed/cancelled. No writes. Inspect https://github.com/$REPO/actions/runs/$RUN_ID"
     fi
-    [ $(( i % 4 )) -ne 0 ] || printf 'CI still running... (%s seconds)\n' "$(( i * 30 ))"
-    sleep 30
+    [ $(( i % 5 )) -ne 0 ] || printf 'CI still running... (%s seconds)\n' "$(( i * 60 ))"
+    sleep 60
 done
 [ "$passed" = 1 ] || fatal "Timed out waiting for CI; no writes."
 PHASE="download & validate artifact"
 printf '\nCI passed. Downloading built LKM artifact...\n'
+ART_META="$(curl -fLsS --retry 2 -H 'Accept: application/vnd.github+json' "https://api.github.com/repos/$REPO/actions/runs/$RUN_ID/artifacts")" || fatal "Could not get GitHub artifact digest"
+printf '%s' "$ART_META" | grep -Fq "$ART_NAME" || fatal "Exact CI artifact not found"
+ART_SHA="$(printf '%s' "$ART_META" | grep -oE '"digest"[[:space:]]*:[[:space:]]*"sha256:[0-9a-f]{64}"' | head -n 1 | sed -E 's/.*sha256:([0-9a-f]{64}).*/\1/')"
+[ "$(printf %s "$ART_SHA" | wc -c)" = 64 ] || fatal "Missing GitHub SHA256 artifact digest"
 curl -fL --retry 4 --retry-delay 3 --connect-timeout 15 --max-time 180 "https://nightly.link/$REPO/actions/runs/$RUN_ID/$ART_NAME.zip" -o "$WORK/bootrc-exp3-artifact.zip" || fatal "Artifact download failed; no writes."
+printf '%s  %s\n' "$ART_SHA" "$WORK/bootrc-exp3-artifact.zip" | sha256sum -c - || fatal "GitHub archive digest mismatch."
 unzip -t "$WORK/bootrc-exp3-artifact.zip" >/dev/null || fatal "Bad artifact zip."
 unzip -p "$WORK/bootrc-exp3-artifact.zip" "out/$KO_NAME" > "$WORK/bootrc-exp3.ko" || fatal "Artifact has no expected .ko"
 [ "$(stat -c %s "$WORK/bootrc-exp3.ko")" -gt 1000000 ] || fatal "Extracted .ko is unexpectedly small."
