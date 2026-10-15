@@ -1,0 +1,124 @@
+name: A146P 44-conflict Physwizz 6.6.89 reference triage
+on:
+  push:
+    branches: [a146p-ksunext-stock-build]
+    paths: [.github/workflows/a146p-physwizz-reference-triage.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  compare:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install source comparison tools
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends git python3 gh
+      - name: Retrieve verified partial-port patch and exact 44-file backlog
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p work/prior report
+          gh run download 38715878102 --repo wiredroid/Patch-Recovery --name A146P-GKI-6.6.89-Samsung50-forward-port-RESEARCH --dir work/prior
+          find work/prior -maxdepth 3 -type f -printf '%p\n' | sort | tee report/reused-report-files.txt
+          PATCH=$(find work/prior -name Samsung-6.6.50-vs-Google-6.6.50.patch -type f -print -quit)
+          CONFLICTS=$(find work/prior -name SAMSUNG-CHANGES-NOT-YET-PORTED.txt -type f -print -quit)
+          test -n "$PATCH" && test -s "$PATCH"
+          test -n "$CONFLICTS" && test -s "$CONFLICTS"
+          cp "$CONFLICTS" report/exact-44-conflict-paths.txt
+          cp "$PATCH" report/verified-Samsung-6.6.50-delta.patch
+          test "$(wc -l < report/exact-44-conflict-paths.txt)" -eq 44
+          echo "Source: successful partial port run 38715878102, 44 unresolved vendor conflict paths" > report/provenance.txt
+      - name: Fetch PINNED Physwizz 6.6.89 and official Google 6.6.89 plus matching Google 6.6.50
+        run: |
+          set -euo pipefail
+          git clone --depth=1 --branch android15-6.6-2025-06_r1 https://android.googlesource.com/kernel/common.git work/google89
+          grep -q '^SUBLEVEL = 89$' work/google89/Makefile
+          git -C work/google89 fetch --depth=1 origin 4cdfe8c8c40affb63caa5e2626b52b0f8d47eca9
+          git -C work/google89 worktree add --detach "$PWD/work/google50" 4cdfe8c8c40affb63caa5e2626b52b0f8d47eca9
+          grep -q '^SUBLEVEL = 50$' work/google50/Makefile
+          git -C work/google50 apply --index "$PWD/report/verified-Samsung-6.6.50-delta.patch"
+          grep -q '^SUBLEVEL = 50$' work/google50/Makefile
+          git clone --depth=1 https://github.com/physwizz/a146p.git work/physwizz
+          if test "$(git -C work/physwizz rev-parse HEAD)" != 6560c1ca1f009dd3e53b698245bf2df1b9804e03; then
+            git -C work/physwizz fetch --depth=1 origin 6560c1ca1f009dd3e53b698245bf2df1b9804e03
+            git -C work/physwizz checkout --detach FETCH_HEAD
+          fi
+          test "$(git -C work/physwizz rev-parse HEAD)" = 6560c1ca1f009dd3e53b698245bf2df1b9804e03
+          grep -q '^SUBLEVEL = 89$' work/physwizz/kernel-6.6/Makefile
+          printf 'Google GKI 6.6.89: '; git -C work/google89 rev-parse HEAD
+          printf 'Google GKI 6.6.50: '; git -C work/google50 rev-parse HEAD
+          printf 'Pinned Physwizz 6.6.89: '; git -C work/physwizz rev-parse HEAD
+          git -C work/physwizz rev-parse HEAD > report/physwizz-reference-commit.txt
+      - name: Compare all 44 conflict files and Samsung 6.6.50 vendor path inventory
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          from pathlib import Path
+          from collections import Counter
+          from difflib import unified_diff
+          import hashlib, csv
+          base=Path('work')
+          roots={
+              'gki89':base/'google89',
+              'samsung50':base/'google50',
+              'physwizz89':base/'physwizz'/'kernel-6.6',
+          }
+          def content(root, rel):
+              p=root/rel
+              return p.read_bytes() if p.is_file() and not p.is_symlink() else None
+          def sig(b):
+              return hashlib.sha256(b).hexdigest() if b is not None else 'ABSENT'
+          def classify(s,g,p):
+              if p is None: return 'PHYSWIZZ_PATH_ABSENT'
+              if p==g and p==s:return 'ALL_IDENTICAL'
+              if p==g:return 'PHYSWIZZ_MATCHES_GKI89'
+              if p==s:return 'PHYSWIZZ_MATCHES_SAMSUNG50'
+              return 'PHYSWIZZ_DISTINCT_NEEDS_SEMANTIC_REVIEW'
+          conflicts=[x.strip() for x in Path('report/exact-44-conflict-paths.txt').read_text().splitlines() if x.strip()]
+          assert len(conflicts)==44
+          rows=[];counts=Counter();diff_parts=[]
+          for rel in conflicts:
+              g=content(roots['gki89'],rel);s=content(roots['samsung50'],rel);p=content(roots['physwizz89'],rel)
+              kind=classify(s,g,p);counts[kind]+=1
+              rows.append((rel,kind,sig(s),sig(g),sig(p),len(s) if s is not None else -1,len(g) if g is not None else -1,len(p) if p is not None else -1))
+              if p is not None and g is not None and p!=g and b'\0' not in p and b'\0' not in g:
+                  a=g.decode(errors='replace').splitlines(keepends=True)
+                  b=p.decode(errors='replace').splitlines(keepends=True)
+                  txt=''.join(unified_diff(a,b,fromfile='google89/'+rel,tofile='physwizz89/'+rel,n=3))
+                  diff_parts.append(txt[:90000]+'\n# [truncated per-file after 90000 bytes]\n' if len(txt)>90000 else txt)
+          with open('report/44-conflict-physwizz-triage.tsv','w',newline='') as f:
+              w=csv.writer(f,delimiter='\t')
+              w.writerow(['path','classification','samsung50_sha256','google89_sha256','physwizz89_sha256','samsung50_size','google89_size','physwizz89_size'])
+              w.writerows(rows)
+          Path('report/44-conflicts-physwizz-vs-GKI89.diff').write_text('\n'.join(diff_parts))
+          lines=['Physwizz 6.6.89 comparison on exactly 44 unresolved Samsung 6.6.50 -> Google GKI 6.6.89 merge-conflict files.','Reference-only: never copy blindly or confuse with exact Samsung A146PXXUHEZB1 stock ABI.','']+[f'{k}: {v}' for k,v in counts.most_common()]+['','Individual files requiring semantic review:']+['  '+p for p,k,*rest in rows if k=='PHYSWIZZ_DISTINCT_NEEDS_SEMANTIC_REVIEW']
+          Path('report/44-conflict-summary.txt').write_text('\n'.join(lines)+'\n')
+          print('\n'.join(lines[:24]))
+          # Cross-check all Samsung delta paths against the pinned Physwizz kernel.
+          found={}
+          for file,category in [('modified-6.6.50-Samsung-files.txt','modified'),('Samsung-only-files.txt','added')]:
+              source=next(iter(Path('work/prior').rglob(file)),None)
+              if source is None:raise FileNotFoundError('Previous verified report missing '+file)
+              for rel in source.read_text().splitlines():
+                  if not rel:continue
+                  s=content(roots['samsung50'],rel);g=content(roots['gki89'],rel);p=content(roots['physwizz89'],rel)
+                  found[rel]=(category, classify(s,g,p))
+          ct=Counter(v for _,v in found.values())
+          Path('report/full-Samsung-vendor-delta-physwizz-classifications.tsv').write_text('path\tvendor_type\tphyswizz_relation\n'+'\n'.join(f'{k}\t{v[0]}\t{v[1]}' for k,v in sorted(found.items()))+'\n')
+          Path('report/all-Samsung-delta-summary.txt').write_text('\n'.join(f'{k}: {v}' for k,v in ct.most_common())+'\n')
+          print('All vendor delta path relation:\n'+Path('report/all-Samsung-delta-summary.txt').read_text())
+          PY
+          test -s report/44-conflict-physwizz-triage.tsv
+          test -s report/44-conflict-summary.txt
+      - name: Upload verified conflict comparison
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: A146P-44-Samsung-conflicts-Physwizz89-reference-REPORT
+          path: report/
+          if-no-files-found: warn
