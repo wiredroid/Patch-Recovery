@@ -1,13 +1,13 @@
-name: A146P Samsung-hardened KernelSU Next LKM candidate
+name: A146P Samsung-safe boot RC kprobe experimental LKM
 on:
   push:
-    branches: [a146p-ksunext-stock-build]
-    paths: [.github/workflows/a146p-samsung-compat-ksu.yml]
+    branches: [a146p-samsung-ksud-bootfix-exp3]
+    paths: [.github/workflows/a146p-samsung-compat-ksu.yml, a146p-stock/apply-ksunext-samsung-bootrc.py]
   workflow_dispatch:
 permissions: {contents: read}
 jobs:
   build:
-    name: Physwizz 6.6.89 + Samsung RKP DEFEX compatibility
+    name: Physwizz 6.6.89 + Samsung RKP DEFEX + init.rc boot-stage kprobe
     runs-on: ubuntu-24.04
     timeout-minutes: 110
     steps:
@@ -26,6 +26,14 @@ jobs:
           git -C work/ksunext fetch --depth=1 origin 159bc7da4266fd9331f63e25901629db4b7bfff8
           git -C work/ksunext checkout --detach FETCH_HEAD
           printf '%s\n' 'PHYSWIZZ 6.6.89 experimental build. NO DEVICE BOOT OR ROOT TESTS WERE PERFORMED.' > report/UNTESTED-DEVICE.txt
+      - name: Patch pinned KernelSU Next Samsung init.rc startup without text writes
+        run: |
+          set -euo pipefail
+          python3 -m py_compile a146p-stock/apply-ksunext-samsung-bootrc.py
+          python3 a146p-stock/apply-ksunext-samsung-bootrc.py work/ksunext
+          grep -Fq 'Samsung boot RC: installed per-file init.rc read proxy' work/ksunext/kernel/runtime/ksud_integration.c
+          grep -Fq 'ksu_samsung_boot_rc_init();' work/ksunext/kernel/runtime/ksud_integration.c
+          echo 'Experimental kprobe fallback; MUST be hardware validated before distribution.' > report/SAMSUNG-BOOTRC-TEST-STATUS.txt
       - name: Prepare and build kernel ELF symbol map
         run: |
           set -euo pipefail
@@ -73,14 +81,14 @@ jobs:
           tail -n 95 "$ROOT/report/ksu-compat-build.log"
           test "$code" -eq 0
           test -s "$KSU/kernelsu.ko"
-          cp "$KSU/kernelsu.ko" "$ROOT/out/ksu-next-physwizz-6.6.89-samsung-compat-UNTESTED.ko"
+          cp "$KSU/kernelsu.ko" "$ROOT/out/ksu-next-physwizz-6.6.89-samsung-bootrc-UNTESTED.ko"
           strings "$ROOT/out/"*.ko | grep '^vermagic=' | tee "$ROOT/report/vermagic.txt"
           strings "$ROOT/out/"*.ko | grep -E '(Samsung DEFEX compatibility enabled|Samsung RKP|kprobe-based syscall)' | tee "$ROOT/report/compat-feature-strings.txt" || true
           sha256sum "$ROOT/out/"*.ko | tee "$ROOT/report/module-sha256.txt"
       - name: Audit external imports against full vmlinux symbol map
         run: |
           set -euo pipefail
-          KO=out/ksu-next-physwizz-6.6.89-samsung-compat-UNTESTED.ko
+          KO=out/ksu-next-physwizz-6.6.89-samsung-bootrc-UNTESTED.ko
           nm -u "$KO" | awk '{print $NF}' | sort -u > report/all-module-imports.txt
           awk '{print $3}' report/System.map | sed -E 's/(\\$.*|\\.llvm\\..*)$//' | sort -u > report/all-kernel-symbols.txt
           comm -23 report/all-module-imports.txt report/all-kernel-symbols.txt > report/not-in-kernel-System.map.txt
@@ -99,7 +107,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: A146P-Physwizz-6.6.89-Samsung-compat-UNTESTED
+          name: A146P-Physwizz-6.6.89-Samsung-bootrc-UNTESTED
           path: |
             report/
             out/
