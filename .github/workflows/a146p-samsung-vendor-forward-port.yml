@@ -1,4 +1,4 @@
-name: A146P port matched Samsung 6.6.50 delta onto official Google 6.6.89
+name: A146P conservative Samsung 6.6.50 partial delta port to Google 6.6.89
 on:
   push:
     branches: [a146p-ksunext-stock-build]
@@ -68,7 +68,7 @@ jobs:
           git -C work/google diff --cached --stat > report/vendor-delta-stat.txt
           wc -l report/Samsung-6.6.50-vs-Google-6.6.50.patch
           sha256sum report/Samsung-6.6.50-vs-Google-6.6.50.patch > report/vendor-patch-sha256.txt
-      - name: Attempt three-way port to official Google Android15 6.6.89 (no Physwizz)
+      - name: Reproducible partial port, preserve Google 6.6.89 in conflicts and publish unported backlog
         run: |
           set -euo pipefail
           git -C work/google reset --hard
@@ -79,23 +79,69 @@ jobs:
           git -C work/google apply --3way --index --verbose "$PWD/report/Samsung-6.6.50-vs-Google-6.6.50.patch" > report/forward-port.log 2>&1
           rc=$?
           set -e
-          cat report/forward-port.log | tail -n 85
+          tail -n 65 report/forward-port.log
           echo "GIT_APPLY_EXIT=$rc" | tee report/port-status.txt
+          git -C work/google status --short > report/post-port-status-before-resolution.txt
+          git -C work/google diff --name-only --diff-filter=U > report/SAMSUNG-CHANGES-NOT-YET-PORTED.txt
+          git -C work/google ls-files -u > report/unmerged-entries-before-resolution.txt
+          echo "Conflicts awaiting semantic engineering:"
+          wc -l report/SAMSUNG-CHANGES-NOT-YET-PORTED.txt
+          head -n 55 report/SAMSUNG-CHANGES-NOT-YET-PORTED.txt
+          if test "$rc" -ne 0 && test ! -s report/unmerged-entries-before-resolution.txt; then
+            echo 'Unexpected patch error with NO merge conflicts: FAIL rather than masking it.'
+            exit "$rc"
+          fi
+          # Conservative PARTIAL reconstruction: retain newer 6.6.89 code where
+          # Samsung's 6.6.50 edits conflict. Do not silently overwrite newer
+          # filesystem, memory management or Android vendor-hook implementations.
+          # The reports explicitly list those unported Samsung changes.
+          while IFS= read -r file; do
+            test -n "$file" || continue
+            if git -C work/google ls-files -u -- "$file" | awk '{print $3}' | grep -qx 2; then
+              git -C work/google checkout --ours -- "$file"
+              git -C work/google add -- "$file"
+            else
+              git -C work/google rm -f -- "$file"
+            fi
+            printf '%s\n' "$file" >> report/GKI-6.6.89-PREFERRED-CONFLICT-PATHS.txt
+          done < report/SAMSUNG-CHANGES-NOT-YET-PORTED.txt
+          if test -n "$(git -C work/google ls-files -u)"; then
+            echo 'Unmerged Git index entries remain after partial-port checkpoint.'
+            exit 13
+          fi
+          grep -q '^SUBLEVEL = 89
+      - name: Upload Samsung-only delta, port results and conflicts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: A146P-GKI-6.6.89-Samsung50-forward-port-RESEARCH
+          path: report/
+          if-no-files-found: warn
+ work/google/Makefile
+          test -f work/google/security/samsung/defex_lsm/Kconfig
+          test -f work/google/include/linux/defex.h
+          git -C work/google diff --cached --binary > report/CONSERVATIVE-PARTIAL-Samsung50-on-GKI89.patch
+          test -s report/CONSERVATIVE-PARTIAL-Samsung50-on-GKI89.patch
+          git -C work/google diff --cached --name-only > report/partial-port-applied-files.txt
+          git -C work/google diff --cached --stat > report/partial-port-stats.txt
+          git -C work/google diff --cached --check > report/whitespace-warnings.txt 2>&1 || true
+          sha256sum report/CONSERVATIVE-PARTIAL-Samsung50-on-GKI89.patch | tee report/partial-port-sha256.txt
           git -C work/google status --short > report/post-port-status.txt
-          git -C work/google diff --name-only --diff-filter=U > report/merge-conflicts.txt
-          git -C work/google ls-files -u > report/unmerged-entries.txt
-          git -C work/google diff --cached --name-only > report/applied-staged-files.txt
-          git -C work/google diff --name-only > report/unstaged-differences.txt
-          printf 'Unmerged files: '; wc -l < report/merge-conflicts.txt
-          printf 'Staged paths: '; wc -l < report/applied-staged-files.txt
-          head -n 55 report/merge-conflicts.txt
+          {
+            echo 'PARTIAL_FORWARD_PORT=YES'
+            echo "ORIGINAL_GIT_APPLY_EXIT=$rc"
+            echo "UNPORTED_SAMSUNG_CONFLICT_PATHS=$(wc -l < report/SAMSUNG-CHANGES-NOT-YET-PORTED.txt)"
+            echo "APPLIED_PATCH_PATHS=$(wc -l < report/partial-port-applied-files.txt)"
+            echo 'Conflict policy: retain Google 6.6.89 for every conflicted file, retain cleanly merged Samsung changes only.'
+          } | tee report/PARTIAL-PORT-RESULT.txt
           cat > report/NOT-A-STOCK-FIRMWARE-BUILD.txt <<'EOF'
-          EXPERIMENTAL SOURCE RECONSTRUCTION ONLY.
-          Applying Samsung 6.6.50 changes to Google 6.6.89 is a proposed port, not evidence that Samsung's A146PXXUHEZB1 6.6.89 vendor changes or export CRCs match.
-          This job intentionally does not create a boot image, flash an image, or claim compatibility with a locked Samsung bootloader.
-          A three-way merge may leave conflicts requiring manual engineering, and zero conflicts does NOT prove a bootable or stock-ABI-equivalent kernel.
+          NOT A COMPLETE VENDOR FORWARD-PORT. NOT A STOCK KERNEL BUILD.
+          Conflicted Samsung changes were NOT applied: see SAMSUNG-CHANGES-NOT-YET-PORTED.txt.
+          This is a reproducible partial source patch preserving newer Google Linux 6.6.89 changes and cleanly applied Samsung edits.
+          A zero-exit of this workflow means partial source assembly is reproducible; it does NOT mean that the unresolved Samsung changes are solved.
+          Reconstructing exact Samsung A146PXXUHEZB1 Linux 6.6.89 ABI/Module.symvers and locked-bootloader privilege-loading still require separate verification.
+          This job does not produce or flash a kernel image.
           EOF
-          exit "$rc"
       - name: Upload Samsung-only delta, port results and conflicts
         if: always()
         uses: actions/upload-artifact@v4
