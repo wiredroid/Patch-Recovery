@@ -1,0 +1,109 @@
+name: A146P HEZB1 6.6.89 stock ABI reconstruction
+on:
+  push:
+    branches: [a146p-ksunext-stock-build]
+    paths: [.github/workflows/a146p-hezb1-stock-reconstruction.yml]
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  compare-samsung-source:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - name: Verify and inspect Samsung 6.6.50 source bundle
+        run: |
+          set -euo pipefail
+          mkdir -p report old
+          curl -fL --retry 3 -o old-source.zip 'https://github.com/wiredroid/Patch-Recovery/releases/download/a146p-stock-source/SM-A146P_15_Opensource.1.zip'
+          echo '7c7cd421d17f46138fe2a0c633882d96dcfa426b18593f4df52cbbd5823da197  old-source.zip' | sha256sum -c -
+          unzip -p old-source.zip Kernel.tar.gz | tar -xz -C old kernel-6.6/Makefile kernel-6.6/security/samsung kernel/kernel_device_modules-6.6/kernel/configs/S96901AA1.config kernel/kernel_device_modules-6.6/kernel/configs/mt6833_overlay.config
+          head -n 7 old/kernel-6.6/Makefile | tee report/old-kernel-release.txt
+          find old/kernel-6.6/security/samsung -type f | sort > report/old-samsung-security-files.txt
+          sha256sum old/kernel/kernel_device_modules-6.6/kernel/configs/*.config > report/old-device-config-hashes.txt
+          echo 'Samsung OSRC source is 6.6.50, not the exact HEZB1 6.6.89 source.' > report/NOT-EXACT-SOURCE.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: A146P-Samsung-6.6.50-source-evidence
+          path: report/
+          if-no-files-found: warn
+  build-stock-config:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 110
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install LLVM 18 kernel dependencies
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends git make gcc clang-18 llvm-18 lld-18 bc bison flex libssl-dev libelf-dev dwarves cpio rsync python3 zstd
+      - name: Get pinned Linux 6.6.89 and KernelSU Next
+        run: |
+          set -euo pipefail
+          mkdir -p work report out
+          git clone --depth=1 https://github.com/physwizz/a146p.git work/src
+          test "$(git -C work/src rev-parse HEAD)" = 6560c1ca1f009dd3e53b698245bf2df1b9804e03
+          git clone --no-checkout --filter=blob:none https://github.com/KernelSU-Next/KernelSU-Next.git work/ksu
+          git -C work/ksu fetch --depth=1 origin 159bc7da4266fd9331f63e25901629db4b7bfff8
+          git -C work/ksu checkout --detach FETCH_HEAD
+          echo 'Source: Physwizz A146P Android 15 Linux 6.6.89; NOT stock Samsung HEZB1.' > report/SOURCE-IDENTITY.txt
+          echo 'Target: Samsung A146PXXUHEZB1 Linux 6.6.89-android15-8-abA146PXXUHEZB1-4k' >> report/SOURCE-IDENTITY.txt
+      - name: Apply actual stock IKCONFIG to 6.6.89 kernel
+        run: |
+          set -euo pipefail
+          export PATH=/usr/lib/llvm-18/bin:$PATH
+          ROOT="$PWD"; SRC="$ROOT/work/src/kernel-6.6"; OUT="$ROOT/work/build"
+          mkdir -p "$OUT"
+          cp a146p-stock/stock-A146PXXUHEZB1-6.6.89.config "$OUT/.config"
+          make -C "$SRC" O="$OUT" ARCH=arm64 LLVM=1 CC=clang LD=ld.lld olddefconfig > report/config-resolve.log 2>&1
+          cp "$OUT/.config" report/resolved-stock-config.txt
+          make -s -C "$SRC" O="$OUT" ARCH=arm64 LLVM=1 CC=clang LD=ld.lld kernelrelease | tee report/kernelrelease.txt
+          echo 'Stock config matched as far as current source allows; missing Samsung Kconfig options and CRC mismatches remain possible.' > report/ABI-UNVERIFIED.txt
+      - name: Compile stock-configured vmlinux and CRC exports
+        run: |
+          set -euo pipefail
+          export PATH=/usr/lib/llvm-18/bin:$PATH
+          ROOT="$PWD"; SRC="$ROOT/work/src/kernel-6.6"; OUT="$ROOT/work/build"
+          set +e
+          timeout 80m make -C "$SRC" O="$OUT" ARCH=arm64 LLVM=1 CC=clang LD=ld.lld -j4 vmlinux > report/vmlinux-build.log 2>&1
+          rc=$?
+          set -e
+          echo "kernel_compile_exit=$rc" | tee report/kernel-status.txt
+          tail -n 100 report/vmlinux-build.log
+          test "$rc" -eq 0
+          test -s "$OUT/vmlinux.symvers"
+          test -s "$OUT/System.map"
+          cp "$OUT/vmlinux.symvers" "$OUT/Module.symvers"
+          make -C "$SRC" O="$OUT" ARCH=arm64 LLVM=1 CC=clang LD=ld.lld -j2 modules_prepare
+          cp "$OUT/System.map" report/System.map
+      - name: Compile Samsung KSU experiment and audit full symbol coverage
+        run: |
+          set -euo pipefail
+          export PATH=/usr/lib/llvm-18/bin:$PATH
+          ROOT="$PWD"; SRC="$ROOT/work/src/kernel-6.6"; OUT="$ROOT/work/build"; KSU="$ROOT/work/ksu/kernel"
+          set +e
+          make -C "$SRC" O="$OUT" M="$KSU" ARCH=arm64 LLVM=1 CC=clang LD=ld.lld CONFIG_KSU=m CONFIG_KSU_SAMSUNG_RKP=y CONFIG_KSU_SAMSUNG_DEFEX=y CONFIG_KSU_SAMSUNG_NO_PATCH_TEXT=y CONFIG_KSU_SAMSUNG_KDP=n KBUILD_MODPOST_WARN=1 -j2 modules > report/module-build.log 2>&1
+          rc=$?
+          set -e
+          echo "module_compile_exit=$rc" | tee report/module-status.txt
+          tail -n 90 report/module-build.log
+          test "$rc" -eq 0
+          test -s "$KSU/kernelsu.ko"
+          cp "$KSU/kernelsu.ko" out/A146P-HEZB1-stock-config-ABI-UNVERIFIED.ko
+          strings out/*.ko | grep '^vermagic=' | tee report/module-vermagic.txt
+          nm -u out/*.ko | awk '{print $NF}' | sort -u > report/module-imports.txt
+          awk '{print $3}' "$OUT/System.map" | sort -u > report/kernel-symbols.txt
+          comm -23 report/module-imports.txt report/kernel-symbols.txt > report/absent-in-reconstructed-kernel.txt
+          awk '{print $2}' "$OUT/Module.symvers" | sort -u > report/kernel-exports.txt
+          comm -23 report/module-imports.txt report/kernel-exports.txt > report/non-exported-imports.txt
+          wc -l report/module-imports.txt report/absent-in-reconstructed-kernel.txt report/non-exported-imports.txt | tee report/import-summary.txt
+          sha256sum out/*.ko | tee report/sha256.txt
+          test ! -s report/absent-in-reconstructed-kernel.txt
+          echo 'EXPERIMENTAL RECONSTRUCTION ONLY: cannot claim stock HEZB1 Module.symvers CRC or locked-bootloader compatibility.' > report/NOT-FOR-STOCK-LOAD.txt
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: A146P-HEZB1-stock-6.6.89-reconstruction-experiment
+          path: |
+            report/
+            out/
+          if-no-files-found: warn
