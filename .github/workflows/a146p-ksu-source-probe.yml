@@ -1,0 +1,65 @@
+name: A146P Samsung source inspection
+on:
+  push:
+    branches:
+      - a146p-ksunext-stock-build
+    paths:
+      - .github/workflows/a146p-ksu-source-probe.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  inspect:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - name: Checkout experiment branch
+        uses: actions/checkout@v4
+      - name: Download Samsung source release and verify checksum
+        env:
+          ASSET_URL: https://github.com/wiredroid/Patch-Recovery/releases/download/a146p-stock-source/SM-A146P_15_Opensource.1.zip
+          EXPECTED_SHA256: 7c7cd421d17f46138fe2a0c633882d96dcfa426b18593f4df52cbbd5823da197
+        run: |
+          set -euo pipefail
+          mkdir -p source report
+          curl -fL --retry 3 --retry-delay 5 "$ASSET_URL" -o source/Samsung-source.zip
+          echo "$EXPECTED_SHA256  source/Samsung-source.zip" | sha256sum -c -
+      - name: Inventory archives and kernel build inputs
+        run: |
+          set -euo pipefail
+          python3 - <<'PY' | tee report/inspection.txt
+          import zipfile, pathlib, sys
+          z=pathlib.Path('source/Samsung-source.zip')
+          print('Samsung source zip size:', z.stat().st_size)
+          with zipfile.ZipFile(z) as a:
+              members=a.infolist()
+              print('Outer archive entries:', len(members))
+              print('Uncompressed total bytes:', sum(e.file_size for e in members))
+              for e in members[:180]:
+                  print(f'{e.file_size:>13} {e.filename}')
+              print('Potential source, build and symbols:')
+              for e in members:
+                  n=e.filename.lower()
+                  if any(t in n for t in ('symvers','config','kernel','build','tar','gz','xz','bz2','zst','readme')):
+                      print(f'{e.file_size:>13} {e.filename}')
+          PY
+          unzip -q source/Samsung-source.zip -d source/unpacked
+          {
+            echo '== Extracted files (sample) =='
+            find source/unpacked -maxdepth 4 -type f -printf '%s %p\n' | head -n 160
+            echo '== Inner archives (first 30 members) =='
+            while IFS= read -r -d '' archive; do
+              echo "### $archive"
+              case "$archive" in
+                *.tar|*.tar.gz|*.tgz|*.tar.xz|*.tar.bz2) tar tf "$archive" 2>/dev/null | head -n 30 || true;;
+                *.zip) unzip -Z -1 "$archive" 2>/dev/null | head -n 30 || true;;
+              esac
+            done < <(find source/unpacked -type f \( -name '*.tar' -o -name '*.tar.gz' -o -name '*.tgz' -o -name '*.tar.xz' -o -name '*.tar.bz2' -o -name '*.zip' \) -print0)
+          } | tee report/extracted-tree.txt
+      - name: Upload source inventory only
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: a146p-source-inspection
+          path: report/
+          if-no-files-found: warn
