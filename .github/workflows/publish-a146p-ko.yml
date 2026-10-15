@@ -1,0 +1,54 @@
+name: Publish direct A146P experimental KO
+on:
+  push:
+    branches: [a146p-ksunext-stock-build]
+    paths: [.github/workflows/publish-a146p-ko.yml]
+  workflow_dispatch:
+permissions:
+  actions: read
+  contents: write
+jobs:
+  publish:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - name: Download verified compiled module from successful run
+        uses: actions/download-artifact@v4
+        with:
+          name: A146P-Physwizz-6.6.89-KSU-late-load-diagnostic
+          run-id: 38696880760
+          github-token: ${{ github.token }}
+          path: compiled
+      - name: Verify raw KO checksum and prepare standalone download
+        run: |
+          set -euo pipefail
+          src=compiled/out/a146p-physwizz-6.6.89-kernelsu-EXPERIMENTAL.ko
+          test -s "$src"
+          echo "5cc15a04c736982c4e5d7a025c67920dcd9aa45957503f0d90405f3b038acf07  $src" | sha256sum -c -
+          mkdir -p dist
+          cp "$src" dist/kernelsu-a146p-physwizz-6.6.89-EXPERIMENTAL.ko
+          file dist/*.ko
+          sha256sum dist/*.ko
+      - name: Publish stand-alone KO in dedicated prerelease
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          tag=a146p-ksunext-physwizz-6.6.89-exp1
+          asset=dist/kernelsu-a146p-physwizz-6.6.89-EXPERIMENTAL.ko
+          cat > /tmp/release-notes.txt <<'EOF'
+          Experimentally compiled KernelSU Next v3.4.2 LKM against physwizz/a146p commit 6560c1ca1f00 kernel 6.6.89.
+          
+          Raw ARM64 kernelsu.ko asset for direct HTTPS download. Not an Odin package or standalone app. This is a test build, NOT production-ready or demonstrated safe to load on the SM-A146P.
+          
+          SHA256: 5cc15a04c736982c4e5d7a025c67920dcd9aa45957503f0d90405f3b038acf07
+          Vermagic: 6.6.89-physwizz SMP preempt mod_unload modversions aarch64
+          62 kernel symbols not exported in the rebuilt kernel. KernelSU Next's ksud insmod has special /proc/kallsyms relocation functionality but was not tested on a device. Regular insmod will fail; this release does not resolve the version/ABI mismatch with stock Samsung kernel.
+          EOF
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" "$asset" --clobber
+          else
+            gh release create "$tag" "$asset" --target "$GITHUB_SHA" --title "A146P Physwizz 6.6.89 KernelSU Next experimental KO" --prerelease --notes-file /tmp/release-notes.txt
+          fi
+          gh release view "$tag" --json url,assets --jq '{url: .url, assets: [.assets[] | {name: .name, size: .size, url: .url}]}'
