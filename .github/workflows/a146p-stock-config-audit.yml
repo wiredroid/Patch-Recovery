@@ -1,0 +1,82 @@
+name: A146P exact stock 6.6.89 config compatibility audit
+on:
+  push:
+    branches: [a146p-ksunext-stock-build]
+    paths:
+      - a146p-stock/stock-A146PXXUHEZB1-6.6.89.config
+      - .github/workflows/a146p-stock-config-audit.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install config build prerequisites
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends git make gcc clang-18 llvm-18 lld-18 bc bison flex libssl-dev libelf-dev python3
+      - name: Fetch pinned Physwizz 6.6.89 source for stock configuration feasibility
+        run: |
+          set -euo pipefail
+          mkdir -p report work
+          git clone --depth=1 https://github.com/physwizz/a146p.git work/physwizz
+          test "$(git -C work/physwizz rev-parse HEAD)" = '6560c1ca1f009dd3e53b698245bf2df1b9804e03'
+          cp a146p-stock/stock-A146PXXUHEZB1-6.6.89.config report/original-stock-config.txt
+      - name: Resolve original Samsung stock config against current available 6.6.89 source
+        run: |
+          set -euo pipefail
+          export PATH=/usr/lib/llvm-18/bin:$PATH
+          ROOT="$PWD"
+          SRC="$ROOT/work/physwizz/kernel-6.6"
+          OUT="$ROOT/work/physwizz-stock-config"
+          mkdir -p "$OUT"
+          cp a146p-stock/stock-A146PXXUHEZB1-6.6.89.config "$OUT/.config"
+          set +e
+          timeout 8m make -C "$SRC" O="$OUT" ARCH=arm64 LLVM=1 CC=clang LD=ld.lld olddefconfig > report/resolve-config.log 2>&1
+          code=$?
+          set -e
+          tail -n 50 report/resolve-config.log
+          if test "$code" -ne 0; then
+            echo "Kconfig resolution failed code=$code; exact Samsung stock configuration cannot yet be rebuilt with this source." | tee report/CONFIG-BLOCKER.txt
+            exit "$code"
+          fi
+          cp "$OUT/.config" report/resolved-against-physwizz-source.config
+          python3 - <<'PY'
+          from pathlib import Path
+          import re
+          def cfg(path):
+              d={}
+              for line in Path(path).read_text().splitlines():
+                  m=re.match(r'^CONFIG_([A-Z0-9_]+)=(.*)',line)
+                  if m:d[m.group(1)]=m.group(2)
+                  m=re.match(r'^# CONFIG_([A-Z0-9_]+) is not set$',line)
+                  if m:d[m.group(1)]='n'
+              return d
+          original=cfg('report/original-stock-config.txt')
+          resolved=cfg('report/resolved-against-physwizz-source.config')
+          changed=[(k,v,resolved.get(k,'ABSENT')) for k,v in original.items() if v!=resolved.get(k,'ABSENT')]
+          critical=['LOCALVERSION','LOCALVERSION_AUTO','LTO_NONE','CFI_CLANG','MODVERSIONS','MODULES','MODULE_SIG','MODULE_SIG_PROTECT','MODULE_SIG_FORCE','SECURITY_DEFEX','SAMSUNG_GKI_KERNEL','SEC_KDP','SEC_RKP','KPROBES','KALLSYMS','ARM64_4K_PAGES','ARM64_BTI_KERNEL']
+          with open('report/stock-critical-options.txt','w') as f:
+              for k in critical:f.write(f"{k}: stock={original.get(k,'ABSENT')} resolved={resolved.get(k,'ABSENT')}\n")
+          with open('report/stock-config-changes.txt','w') as f:
+              for k,a,b in changed:f.write(f"{k}: {a} -> {b}\n")
+          with open('report/summary.txt','w') as f:
+              f.write('Samsung A146PXXUHEZB1 stock 6.6.89 IKCONFIG compared with Physwizz 6.6.89 source.\n')
+              f.write(f'Stock option count: {len(original)}\nReconciled option count: {len(resolved)}\nChanged/missing stock options: {len(changed)}\n')
+              f.write('This does NOT prove ABI compatibility, Module.symvers CRC matching, or locked-bootloader loading.\n')
+          print(Path('report/summary.txt').read_text())
+          print(Path('report/stock-critical-options.txt').read_text())
+          print("First 60 changed settings:")
+          print('\n'.join(Path('report/stock-config-changes.txt').read_text().splitlines()[:60]))
+          PY
+          test -f report/summary.txt
+      - name: Upload stock config feasibility findings
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: A146PXXUHEZB1-stock-6.6.89-config-compatibility-audit
+          path: report/
+          if-no-files-found: warn
