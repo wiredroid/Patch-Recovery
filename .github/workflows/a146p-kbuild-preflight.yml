@@ -1,0 +1,47 @@
+name: A146P evaluate Samsung kernel toolchain and Kbuild
+on:
+  push:
+    branches: [a146p-ksunext-stock-build]
+    paths: [.github/workflows/a146p-kbuild-preflight.yml]
+  workflow_dispatch:
+permissions: {contents: read}
+jobs:
+  examine:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install minimum host tools
+        run: sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends clang-18 llvm-18 lld-18 bc bison flex libelf-dev libssl-dev dwarves rsync python3 unzip
+      - name: Acquire Samsung source
+        run: |
+          set -euo pipefail
+          mkdir -p w
+          curl -fLsS --retry 3 https://github.com/wiredroid/Patch-Recovery/releases/download/a146p-stock-source/SM-A146P_15_Opensource.1.zip -o w/samsung.zip
+          echo '7c7cd421d17f46138fe2a0c633882d96dcfa426b18593f4df52cbbd5823da197  w/samsung.zip' | sha256sum -c -
+          unzip -p w/samsung.zip Kernel.tar.gz | tar -xz -C w
+      - name: Inspect trees and try conventional Kbuild configuration
+        run: |
+          set -uo pipefail
+          export PATH=/usr/lib/llvm-18/bin:$PATH
+          echo ==TOP==
+          du -sh w/kernel-6.6 w/kernel w/prebuilts 2>&1 || true
+          ls -lah w/ | head -n 35
+          echo ==CONFIGS==
+          find w -maxdepth 6 \( -name '*defconfig' -o -name '.config' -o -name 'Module.symvers' -o -name 'build.config*' \) | head -n 90
+          echo ==KERNEL_RELEASE==
+          grep -E '^(VERSION|PATCHLEVEL|SUBLEVEL|EXTRAVERSION) ' w/kernel-6.6/Makefile || true
+          echo ==PREBUILTS==
+          ls -lah w/kernel/prebuilts 2>&1 || true
+          ls -lah w/kernel/prebuilts/build-tools/path/linux-x86 2>&1 || true
+          echo ==BUILD_DEPS==
+          sed -n '1,110p' w/kernel/tools/bazel 2>&1 || true
+          echo ==DEVICE_MODULES_CONFIG==
+          sed -n '1,85p' w/kernel/kernel_device_modules-6.6/.config 2>&1 || true
+          echo ==KBUILD_GKI_TEST==
+          mkdir -p w/kernel-out
+          make -C w/kernel-6.6 O="$(pwd)/w/kernel-out" ARCH=arm64 LLVM=1 CC=clang LD=ld.lld gki_defconfig
+          echo "Config generated; version:"
+          grep -E '^(CONFIG_(CFI_CLANG|MODVERSIONS|LTO_NONE|LTO_CLANG_THIN|ARM64_4K_PAGES|KALLSYMS)=)' w/kernel-out/.config || true
+          make -C w/kernel-6.6 O="$(pwd)/w/kernel-out" ARCH=arm64 LLVM=1 CC=clang LD=ld.lld -j2 modules_prepare
+          echo 'KBUILD_MODULES_PREPARE_OK'
