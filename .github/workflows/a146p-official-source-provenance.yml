@@ -40,7 +40,7 @@ jobs:
           unzip -p work/SM-A146P_15_Opensource.1.zip Kernel.tar.gz > work/Samsung-Kernel.tar.gz
           mkdir -p work/samsung-kernel
           tar -xzf work/Samsung-Kernel.tar.gz -C work/samsung-kernel
-          find work/samsung-kernel -maxdepth 4 -name Makefile | head -n 25 | tee report/samsung-makefile-locations.txt
+          find work/samsung-kernel -maxdepth 4 -name Makefile | sed -n '1,25p' | tee report/samsung-makefile-locations.txt
           python3 - <<'PY'
           from pathlib import Path
           base=Path('work/samsung-kernel')
