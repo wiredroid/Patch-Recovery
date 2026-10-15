@@ -1,0 +1,49 @@
+name: A146P stock 6.6.89 compile failure forensic extraction
+on:
+  push:
+    branches: [a146p-ksunext-stock-build]
+    paths: [.github/workflows/a146p-stock-abi-error-extract.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  inspect:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Download failed stock 6.6.89 vmlinux compilation diagnostic artifact
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p report
+          gh run download 38766492106 --repo wiredroid/Patch-Recovery --name A146P-stock-HEZB1-partial-GKI89-ABI-PREFLIGHT-NOT-FLASHABLE --dir report
+          test -s report/compile-vmlinux.log
+          test -s report/CONFIG-drift-summary.txt
+      - name: Print FIRST compiler failures with original context, not last build lines
+        run: |
+          set -euo pipefail
+          cat report/CONFIG-drift-summary.txt
+          echo 'FIRST 50 compiler diagnostic matches:'
+          grep -n -m 50 -E '(^| )fatal error:| error:|undefined reference|No rule to make target|No such file or directory|make\\[[0-9]+\\]: \\*\\*\\*|ld.lld: error:' report/compile-vmlinux.log || true
+          echo 'FIRST compiler error with 10 lines of surrounding context:'
+          python3 - <<'PY'
+          from pathlib import Path
+          ls=Path('report/compile-vmlinux.log').read_text(errors='replace').splitlines()
+          bad=[' error:','fatal error:','undefined reference','No rule to make target','ld.lld: error:']
+          found=[i for i,l in enumerate(ls) if any(x in l for x in bad)]
+          print('compile log lines:',len(ls),'compiler error lines:',len(found))
+          for i in found[:10]:
+              print('\nDIAGNOSTIC line',i+1)
+              print('\n'.join(f'{j+1:07d}: {ls[j]}' for j in range(max(0,i-8),min(len(ls),i+10))))
+          if not found:
+              print('No literal error signatures: inspect tail and compiler exit code separately.')
+          PY
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: A146P-STOCK-GKI89-compile-FAILURE-ROOT-CAUSE-REPORT
+          path: report/
+          if-no-files-found: warn
