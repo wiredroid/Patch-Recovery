@@ -1,0 +1,22 @@
+diff --git a/fs/f2fs/f2fs.h b/fs/f2fs/f2fs.h
+--- a/fs/f2fs/f2fs.h
++++ b/fs/f2fs/f2fs.h
+@@ -884,6 +884,18 @@
+ 	unsigned char i_compress_flag;		/* compress flag */
+ 	unsigned int i_cluster_size;		/* cluster size */
+ 
++#ifdef CONFIG_F2FS_ML_BASED_STREAM_SEPARATION
++	__u32 mtime_cnt;
++	__u32 is_cache;
++	__u64 mtime_interval;
++	__u32 overwrite_cnt;
++	__u32 append_cnt;
++	__u64 write_chunk;
++	__u64 write_chunk_cnt;
++#ifdef CONFIG_F2FS_ML_STREAMID_FORCE_COLD
++	__u32 is_force_cold;
++#endif
++#endif
+ 	unsigned int atomic_write_cnt;
+ 	loff_t original_i_size;		/* original i_size before atomic write */
+ };
