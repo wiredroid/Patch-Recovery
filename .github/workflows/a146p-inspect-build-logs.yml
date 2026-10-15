@@ -1,0 +1,26 @@
+name: A146P inspect failed kernel build logs
+on:
+  push:
+    branches: [a146p-ksunext-stock-build]
+    paths: [.github/workflows/a146p-inspect-build-logs.yml]
+  workflow_dispatch:
+permissions:
+  actions: read
+  contents: read
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: a146p-stock-ksunext-build-results
+          run-id: 38688911538
+          github-token: ${{ github.token }}
+          path: diagnostics
+      - name: Show Samsung instructions and compiler failures
+        run: |
+          find diagnostics -type f -printf '%s %p\n'
+          for f in diagnostics/report/README_Kernel.txt diagnostics/report/source-discovery.txt diagnostics/report/build-kernel.log diagnostics/report/symvers-found.txt diagnostics/report/module-build.log; do
+            echo "=== $f ==="
+            if test -f "$f"; then tail -n 180 "$f"; fi
+          done
