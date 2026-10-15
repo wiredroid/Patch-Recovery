@@ -30,3 +30,16 @@ The guard is **defined** in A146P50 and pinned Physwizz's `kernel-6.6/kernel/reb
 4. No stock-compatible KernelSU Next `.ko`, safe stock module load, autonomous boot-persistent migration, or locked-bootloader root is demonstrated. Original OEM signed boot and init_boot must remain unmodified for locked-bootloader research; an independently verified privileged loader would still be required.
 
 Do not flash these reconstructed or comparative-source kernel images.
+
+
+## 2026-10-16 compiler continuation: first helper resolved, second ABI-backed repair
+
+The corrected first rebuild [run 38778209850](https://github.com/wiredroid/Patch-Recovery/actions/runs/38778209850) completed the source-application/configuration stages and progressed beyond the original `print_block_data` compiler error. The **new first actual compiler error** was `fs/f2fs/namei.c:360:19`: no member `is_force_cold` in `struct f2fs_inode_info`, with subsequent `is_cache` missing-member errors on lines 363–381. [Job diagnostics artifact 11994039755](https://github.com/wiredroid/Patch-Recovery/actions/runs/38778209850/artifacts/11994039755).
+
+The original, independently hash-verified OEM `boot.img` was recovered from the user's Files Library. Its embedded BTF SHA-256 is `169aa6aac6c8ff3d78bbda9d1b0942da12c84c2f491fdcbb504c36260090f67e`; the original `init_boot.img` hash was also verified and the files were not modified. **Actual shipping 6.6.89 BTF** records `f2fs_inode_info` size 1440 bytes, `mtime_cnt` byte offset 1380, `is_cache` 1384, `mtime_interval` 1392, `overwrite_cnt` 1400, `append_cnt` 1404, `write_chunk` 1408, `write_chunk_cnt` 1416, `is_force_cold` 1424, `atomic_write_cnt` 1428, `original_i_size` 1432.
+
+Stock IKCONFIG explicitly enables `CONFIG_F2FS_ML_BASED_STREAM_SEPARATION=y` and `CONFIG_F2FS_ML_STREAMID_FORCE_COLD=y`. The *entire gated ML-field snippet* is byte-identical in Samsung A146P GPL50, pinned Physwizz A146P89, and pinned MediaTek A145R92 headers. Google's GKI89 and A34 do not contain it. [Patch 0002](patches/0002-f2fs-restore-stock-confirmed-ml-stream-inode-fields.patch) therefore restores **only** those stock-BTF-confirmed Samsung fields into the otherwise retained GKI89 `f2fs_inode_info`; no blind Physwizz header copy. Applied by the isolated stock build workflow in commit `cab766e08c95dd042400845e7c7bff07a0f3aaea`.
+
+[Next verification run 38780446601](https://github.com/wiredroid/Patch-Recovery/actions/runs/38780446601) recompiles with both focused source patches. It must be evaluated from actual job logs and artifacts. A successful field declaration repair alone does not show the complete 1440-byte structure layout matches.
+
+A reusable [BTF named-member comparator](tools/compare-btf-layouts.py) was added in commit `a57ee6a3e60533af4735d3cf29441c4be2151115`. It compares BTF named struct/union member offsets, member types, bitfields and sizes from stock and candidate TSV exports, handling duplicate name variants. It **does not** yet check recursive anonymous/transitive type graphs, exported symbol CRCs, signature enforcement or runtime behavior. Full candidate-side BTF comparison remains blocked until `vmlinux` compiles and links.
