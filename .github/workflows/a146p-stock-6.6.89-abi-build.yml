@@ -83,6 +83,20 @@ jobs:
           for k in ['CONFIG_ARM64_4K_PAGES','CONFIG_MODVERSIONS','CONFIG_DEBUG_INFO_BTF','CONFIG_SECURITY_DEFEX','CONFIG_SAMSUNG_GKI_KERNEL','CONFIG_LTO_NONE']:
               print(k,'stock=',target.get(k),'candidate=',new.get(k))
           PY
+      - name: Substitute local development module-signing key ONLY for research build
+        run: |
+          set -euo pipefail
+          export PATH=/usr/lib/llvm-18/bin:$PATH
+          ROOT="$PWD"; KDIR="$ROOT/work/google89"; OUT="$ROOT/work/build"
+          grep '^CONFIG_MODULE_SIG_KEY=' "$OUT/.config" | tee report/OEM-MODULE-SIGNING-KEY-REQUIREMENT.txt
+          if grep -q 'DEVICE_MODULES_REL_DIR.*/certs/mtk_signing_key.pem' "$OUT/.config"; then
+            "$KDIR/scripts/config" --file "$OUT/.config" --set-str MODULE_SIG_KEY certs/signing_key.pem
+            make -C "$KDIR" O="$OUT" ARCH=arm64 LLVM=1 CC=clang LD=ld.lld olddefconfig > report/research-only-dev-key-olddefconfig.log 2>&1
+            echo 'RESEARCH BUILD ONLY: substituted ephemeral self-signed signing key for inaccessible OEM private MediaTek signing key. Any resulting signatures differ from stock; not compatible with locked OEM verified boot.' > report/RESEARCH-MODULE-SIGNATURE-NOT-STOCK.txt
+            grep '^CONFIG_MODULE_SIG_KEY=' "$OUT/.config" | tee report/RESEARCH-KEY-CONFIG.txt
+          else
+            echo 'No known private MTK module signing key path found. No substitution performed.' > report/RESEARCH-MODULE-SIGNATURE-NOT-STOCK.txt
+          fi
       - name: Compile vmlinux of PARTIAL 6.6.89 source (not a flashable image)
         run: |
           set -euo pipefail
@@ -95,7 +109,9 @@ jobs:
           rc=$?
           set -e
           echo "VMLINUX_COMPILE_EXIT=$rc" | tee report/vmlinux-status.txt
-          tail -n 100 report/compile-vmlinux.log
+          echo 'FIRST compiler errors and context, preserving actual root cause:'
+          grep -n -m 35 -E 'error:|fatal:|No rule to make target|No such file or directory|undefined reference' report/compile-vmlinux.log || true
+          tail -n 45 report/compile-vmlinux.log
           test "$rc" -eq 0
           test -s "$OUT/vmlinux"
           test -s "$OUT/System.map"
