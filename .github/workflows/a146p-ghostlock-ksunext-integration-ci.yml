@@ -1,0 +1,58 @@
+name: A146P GhostLock KernelSU Next manager integration compile check
+on:
+  push:
+    branches: [a146p-ksunext-stock-build]
+    paths:
+      - .github/workflows/a146p-ghostlock-ksunext-integration-ci.yml
+      - 'a146p-stock/ghostlock/patches/**'
+  workflow_dispatch:
+permissions: { contents: read }
+jobs:
+  compile-manager-integration:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare pinned upstream and apply only manager discovery patch
+        run: |
+          set -euo pipefail
+          mkdir -p report
+          git clone --no-checkout --filter=blob:none https://github.com/YuKongA/ghostlock-app.git work/ghostlock
+          git -C work/ghostlock fetch --depth=1 origin 847793ea7f936c241f38f2ca840d382162ac5256
+          git -C work/ghostlock checkout --detach FETCH_HEAD
+          test "$(git -C work/ghostlock rev-parse HEAD)" = 847793ea7f936c241f38f2ca840d382162ac5256
+          git -C work/ghostlock apply --check "$GITHUB_WORKSPACE/a146p-stock/ghostlock/patches/0001-ghostlock-prepareksud-detect-ksunext-manager.patch"
+          git -C work/ghostlock apply "$GITHUB_WORKSPACE/a146p-stock/ghostlock/patches/0001-ghostlock-prepareksud-detect-ksunext-manager.patch"
+          grep -q '<package android:name="com.rifsxd.ksunext"' work/ghostlock/app/src/main/AndroidManifest.xml
+          grep -q 'listOf("com.rifsxd.ksunext"' work/ghostlock/app/src/main/kotlin/com/ghostlock/app/data/AndroidGhostlockRepository.kt
+          echo "UPSTREAM_SHA=847793ea7f936c241f38f2ca840d382162ac5256" > report/pinned-upstream-and-patch.txt
+          sha256sum a146p-stock/ghostlock/patches/0001-ghostlock-prepareksud-detect-ksunext-manager.patch >> report/pinned-upstream-and-patch.txt
+          git -C work/ghostlock diff --stat >> report/pinned-upstream-and-patch.txt
+          echo "This check does not register any A146P profile, run GhostLock, build an exploit APK, or modify a phone." > report/NO-EXPLOIT-EXECUTION.txt
+      - name: Set up JDK 21
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+      - name: Install Android SDK command line tools
+        uses: android-actions/setup-android@v3
+      - name: Set up Gradle
+        uses: gradle/actions/setup-gradle@v4
+      - name: Kotlin integration compile and unit tests (NO APK)
+        working-directory: work/ghostlock
+        run: |
+          set -uo pipefail
+          chmod +x ./gradlew
+          ./gradlew :app:compileDebugKotlin :app:testDebugUnitTest --no-daemon --stacktrace > "$GITHUB_WORKSPACE/report/compile-and-tests.log" 2>&1
+          rc=$?
+          echo "KOTLIN_COMPILE_TEST_EXIT=$rc" | tee "$GITHUB_WORKSPACE/report/status.txt"
+          grep -n -m 25 -E 'FAILURE:|What went wrong|e: |error:|Could not|Could not find' "$GITHUB_WORKSPACE/report/compile-and-tests.log" || true
+          tail -n 60 "$GITHUB_WORKSPACE/report/compile-and-tests.log"
+          exit "$rc"
+      - name: Upload evidence only, NEVER a runnable APK
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: A146P-GhostLock-KernelSU-Next-manager-integration-CI-REPORT-ONLY
+          path: report/
+          if-no-files-found: warn
