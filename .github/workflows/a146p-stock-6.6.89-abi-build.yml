@@ -72,6 +72,14 @@ jobs:
           git -C work/google89 apply "$F2FS_COMPRESS_PORT"
           grep -q 'static inline bool f2fs_has_compressed_data' work/google89/fs/f2fs/f2fs.h
           sha256sum "$F2FS_COMPRESS_PORT" > report/SAMSUNG-F2FS-COMPRESSION-HELPER-PATCH-SHA256.txt
+          # Stock A146PXXUHEZB1 BTF: f2fs_mount_info=376, flush_group at byte 16.
+          # Missing Samsung field displaces 118 subsequent f2fs_sb_info offsets by -8.
+          F2FS_FLUSH_GROUP_PORT="$PWD/a146p-stock/patches/0005-f2fs-restore-stock-confirmed-flush-group-layout.patch"
+          test -s "$F2FS_FLUSH_GROUP_PORT"
+          git -C work/google89 apply --check "$F2FS_FLUSH_GROUP_PORT"
+          git -C work/google89 apply "$F2FS_FLUSH_GROUP_PORT"
+          grep -q 'kgid_t flush_group;' work/google89/fs/f2fs/f2fs.h
+          sha256sum "$F2FS_FLUSH_GROUP_PORT" > report/SAMSUNG-F2FS-FLUSH-GROUP-PATCH-SHA256.txt
           cat > report/stock-BTF-F2FS-ML-layout-anchor.tsv <<'EOF'
           struct_name\tstock_size_bytes\tmember\tstock_byte_offset
           f2fs_inode_info\t1440\tis_cache\t1384
@@ -179,6 +187,7 @@ jobs:
           cred	184
           file	264
           f2fs_sb_info	5992
+          f2fs_mount_info	376
           f2fs_inode_info	1440
           f2fs_super_block	3072
           f2fs_checkpoint	192
@@ -204,6 +213,31 @@ jobs:
           print('\n'.join(out))
           PY
           echo 'SIZE_MATCH_ONLY is NOT proof that full member offsets, structure layouts, function behavior, symbol CRCs, or stock firmware signatures match.' > report/BTF-AUDIT-NOTICE.txt
+          # Fail closed on actual shipping OEM BTF dimensions; don't accept only
+          # successful compilation as proof of source-structure compatibility.
+          python3 - <<'PY'
+          from pathlib import Path
+          import csv, re
+          summary={row['name']:row for row in csv.DictReader(
+              Path('report/STOCK-BTF-vs-CANDIDATE-size-audit.tsv').open(),delimiter='\t')}
+          required={'f2fs_sb_info':'5992','f2fs_mount_info':'376'}
+          for name, expected in required.items():
+              row=summary.get(name)
+              if row is None or row['stock_size']!=expected or row['candidate_size']!=expected:
+                  raise SystemExit(f'FAIL: {name} BTF size is not exact stock {expected}: {row}')
+          def actual_offset(struct, field):
+              txt=Path(f'report/pahole-structs/{struct}.txt').read_text()
+              m=re.search(r'\b'+re.escape(field)+r';\s*/\*\s*(\d+)\s+\d+\s*\*/',txt)
+              if not m:
+                  raise SystemExit(f'FAIL: missing BTF field {struct}.{field}')
+              return int(m.group(1))
+          for struct, field, expected in [('f2fs_mount_info','flush_group',16),
+                                          ('f2fs_sb_info','gc_lock',2416)]:
+              got=actual_offset(struct,field)
+              if got!=expected:
+                  raise SystemExit(f'FAIL: {struct}.{field} offset {got}, expected {expected}')
+          print('PASS: stock BTF f2fs_mount_info=376, flush_group=16, f2fs_sb_info=5992, gc_lock=2416')
+          PY
       - name: Compile pinned KernelSU Next .ko against partial GKI89 vmlinux (UNVERIFIED RESEARCH ONLY)
         run: |
           set -euo pipefail
