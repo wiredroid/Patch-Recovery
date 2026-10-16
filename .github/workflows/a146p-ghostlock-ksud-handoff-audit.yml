@@ -27,6 +27,8 @@ jobs:
           test "$(git -C work/ghostlock rev-parse HEAD)" = 847793ea7f936c241f38f2ca840d382162ac5256
           git -C work/ghostlock apply --check "$PWD/a146p-stock/ghostlock/patches/0001-ghostlock-prepareksud-detect-ksunext-manager.patch"
           git -C work/ghostlock apply "$PWD/a146p-stock/ghostlock/patches/0001-ghostlock-prepareksud-detect-ksunext-manager.patch"
+          git -C work/ghostlock apply --check "$PWD/a146p-stock/ghostlock/patches/0002-ghostlock-native-ksunext-ksud-fallback.patch"
+          git -C work/ghostlock apply "$PWD/a146p-stock/ghostlock/patches/0002-ghostlock-native-ksunext-ksud-fallback.patch"
           git clone --no-checkout --filter=blob:none https://github.com/KernelSU-Next/KernelSU-Next.git work/ksunext
           git -C work/ksunext fetch --depth=1 origin 159bc7da4266fd9331f63e25901629db4b7bfff8
           git -C work/ksunext checkout --detach FETCH_HEAD
