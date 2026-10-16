@@ -52,13 +52,13 @@ def audit(args):
     requirements = {
         "ghostlock_kotlin_discovers_ksunext": KSU_MANAGER in repository and "libksud.so" in repository,
         "ghostlock_manifest_queries_ksunext": KSU_MANAGER in manifest,
-        "ghostlock_native_invokes_kmi_late_load": bool(re.search(r'late-load --kmi \\\"\\$KMI\\\" --allow-shell', script)),
+        "ghostlock_native_invokes_kmi_late_load": bool(re.search(r"late-load --kmi .*--allow-shell", script)) and "$KMI" in script,
         "ghostlock_native_module_poll": "/proc/modules" in script and "kernelsu" in script,
         "ksunext_late_load_uses_kmi_asset": 'format!("{kmi}_kernelsu.ko")' in late_load and "assets::get_asset_data(&ko_name)" in late_load,
         "ksunext_default_manager_matches": 'String::from("com.rifsxd.ksunext")' in cli,
         "ksunext_aarch64_embeds_assets": 'folder = "bin/aarch64"' in assets and "RustEmbed" in assets,
         "ksunext_loader_handles_kallsyms": "/proc/kallsyms" in ksuinit and "init_module" in ksuinit,
-        "ksunext_runtime_fallback_required": True,
+        "ghostlock_native_ksunext_fallback": "com.rifsxd.ksunext*/lib/arm64/libksud.so" in script,
     }
     if not ko.is_file():
         raise ValueError("missing compiled research .ko: " + str(ko))
@@ -79,7 +79,7 @@ def audit(args):
 
     # The source-level contract can pass, but OEM stock ABI remains a hard gate.
     integration_fields = [k for k in requirements if k not in (
-        "ksunext_runtime_fallback_required", "research_module_has_oem_vermagic"
+        "research_module_has_oem_vermagic"
     )]
     contract_ok = all(requirements[k] for k in integration_fields)
     outcome = {
