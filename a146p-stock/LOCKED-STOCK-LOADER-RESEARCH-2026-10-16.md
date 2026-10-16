@@ -28,3 +28,15 @@ Samsung's official US SM-A146U update page documents Android15 `A146USQSJEZH3` o
 3. Any unlocked Physwizz → KernelSU Next boot-persistent migration must stay a separate rollback-capable project. Do not relock, flash untested kernels or assume APatch→stock preserves root.
 
 **No locked-bootloader flashing or exploit instructions are recommended by this note.**
+
+## 2026-10-16 follow-up: Samsung's October GhostLock security patch & Strong Integrity
+
+**Verified new official evidence:** Samsung's October 2026 Security Maintenance Release
+(https://security.samsungmobile.com/securityUpdate.smsb?month=10&year=2026)
+explicitly lists \`CVE-2026-43499\` in its **Google High CVE** section, among patches included in its October maintenance package. The bulletin notes that rollouts can vary by model/region and some chipset-specific patches may be delayed. This **does not** prove SM-A146P specifically was previously vulnerable, nor prove that the user's \`A146PXXUHEZB1\` image includes or lacks the fix. Treat its reported 2026-10-05 security patch date as a reason to inspect exact build/vendor code before any GhostLock feasibility assertion, not evidence of exploitability.
+
+The independently tested Samsung GhostLock port (https://github.com/mobilehackinglab/ghostlock-a17) is for A17 MT6789 Android16 Linux6.12 on different bootloader/security conditions; its offsets and primitive chain cannot safely be transferred to SM-A146P MT6833 Android15 Linux6.6.89. This is an **unverified locked-stock loader hypothesis**, not a working device-root mechanism.
+
+**Google Play Integrity:** The API's \`MEETS_STRONG_INTEGRITY\` label still exists (https://developer.android.com/google/play/integrity/verdicts). Since May 2025, Android 13+ verdicts require stronger hardware-backed security signals; Strong also requires recent system and vendor security patches. New community discussion on 2026-10-14/15 reports revoked public keyboxes and vanished integrity for some rooted phones (https://www.reddit.com/r/Magisk/comments/1x5zoob/how_to_fix_this_error/). Those are **reports**, not official proof that Google retired the Strong tier, nor evidence a spoofed locked state becomes genuine verified boot.
+
+**Physical bootloader status remains unlocked** for the currently functioning Physwizz+KernelSU Next boot chain. Never relock it with custom \`boot\`/\`init_boot\`; original OEM-signed images' SHA256 identity is mandatory for the true stock research target. The stock source compiler run \`38807656141\` failed on \`f2fs_has_compressed_data\` undeclared in \`fs/f2fs/extent_cache.c\`; the previously prepared focused Samsung F2FS patch \`0004\` is now wired into the stock branch workflow commit \`b4e9a97d643f3b7137f07f9feb7772a9bd66f891\` and checked by CI run https://github.com/wiredroid/Patch-Recovery/actions/runs/38827404310. A new compile advancing past this error **will not constitute stock ABI match or proof of locked-BL root**.
