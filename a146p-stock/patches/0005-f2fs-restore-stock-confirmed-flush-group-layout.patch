@@ -1,0 +1,11 @@
+diff --git a/fs/f2fs/f2fs.h b/fs/f2fs/f2fs.h
+--- a/fs/f2fs/f2fs.h
++++ b/fs/f2fs/f2fs.h
+@@ -190,6 +190,7 @@ struct f2fs_mount_info {
+ 	unsigned int opt;
+ 	block_t root_reserved_blocks;	/* root reserved blocks */
+ 	kuid_t s_resuid;		/* reserved blocks for uid */
+ 	kgid_t s_resgid;		/* reserved blocks for gid */
++	kgid_t flush_group;		/* Samsung stock BTF-confirmed layout */
+ 	int active_logs;		/* # of active logs */
+ 	int inline_xattr_size;		/* inline xattr size */
