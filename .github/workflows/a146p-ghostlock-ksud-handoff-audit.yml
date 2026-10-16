@@ -1,0 +1,58 @@
+name: A146P GhostLock to KernelSU Next ksud handoff contract audit
+on:
+  push:
+    branches: [a146p-ksunext-stock-build]
+    paths:
+      - .github/workflows/a146p-ghostlock-ksud-handoff-audit.yml
+      - a146p-stock/tools/audit-ghostlock-ksud-handoff.py
+      - 'a146p-stock/ghostlock/patches/**'
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  static-contract:
+    name: Audit pinned GhostLock and ksud against exact experimental module
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+      - name: Fetch pinned GhostLock and KernelSU Next sources
+        run: |
+          set -euo pipefail
+          mkdir -p work report
+          git clone --no-checkout --filter=blob:none https://github.com/YuKongA/ghostlock-app.git work/ghostlock
+          git -C work/ghostlock fetch --depth=1 origin 847793ea7f936c241f38f2ca840d382162ac5256
+          git -C work/ghostlock checkout --detach FETCH_HEAD
+          test "$(git -C work/ghostlock rev-parse HEAD)" = 847793ea7f936c241f38f2ca840d382162ac5256
+          git -C work/ghostlock apply --check "$PWD/a146p-stock/ghostlock/patches/0001-ghostlock-prepareksud-detect-ksunext-manager.patch"
+          git -C work/ghostlock apply "$PWD/a146p-stock/ghostlock/patches/0001-ghostlock-prepareksud-detect-ksunext-manager.patch"
+          git clone --no-checkout --filter=blob:none https://github.com/KernelSU-Next/KernelSU-Next.git work/ksunext
+          git -C work/ksunext fetch --depth=1 origin 159bc7da4266fd9331f63e25901629db4b7bfff8
+          git -C work/ksunext checkout --detach FETCH_HEAD
+          test "$(git -C work/ksunext rev-parse HEAD)" = 159bc7da4266fd9331f63e25901629db4b7bfff8
+          printf '%s\n' 'RESEARCH CONTRACT ONLY — NO EXPLOIT, APK, KERNEL FLASH, BOOTLOADER CHANGE OR MODULE LOADING.' > report/NO-RUN-OR-LOAD.txt
+      - name: Download experimental module from known provenance CI run
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh run download 38942607886 --repo wiredroid/Patch-Recovery --name A146P-stock-HEZB1-partial-GKI89-ABI-PREFLIGHT-NOT-FLASHABLE --dir work/lkm-ci
+          KO="$(find work/lkm-ci -type f -name A146P-GKI89-PARTIAL-KSUNEXT-UNVERIFIED-DO-NOT-LOAD.ko -print -quit)"
+          test -n "$KO" && test -s "$KO"
+          echo "KO=$KO" >> "$GITHUB_ENV"
+          echo "EXPECTED_KO_SHA=3ed5fda0fd042af69f778876f223d3d803ae27042bcf3101d37d48cb5345ec0e" >> "$GITHUB_ENV"
+          echo "Experimental ko location: $KO"
+      - name: Audit exact GhostLock to ksud source contract and module ELF
+        run: |
+          set -euo pipefail
+          python3 -m py_compile a146p-stock/tools/audit-ghostlock-ksud-handoff.py
+          python3 a146p-stock/tools/audit-ghostlock-ksud-handoff.py --ghostlock-root work/ghostlock --ksunext-root work/ksunext --ko "$KO" --expected-sha256 "$EXPECTED_KO_SHA" --output report/handoff
+          echo 'AUDIT COMPLETE — SOURCE CONTRACT ONLY. NO PACKAGED KSUD OR OEM ABI MATCH.' > report/handoff/NOT-READY-TO-LOAD.txt
+      - name: Upload audit reports only (no module binaries or APK)
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: A146P-GhostLock-KSUD-HANDOFF-SOURCE-ELF-AUDIT-REPORT-ONLY
+          path: report/
+          if-no-files-found: warn
