@@ -1,0 +1,96 @@
+name: A146P KernelSU Next experimental Android ksud asset-embed build audit
+on:
+  push:
+    branches: [a146p-ksunext-stock-build]
+    paths:
+      - .github/workflows/a146p-ksud-android-embed-preflight.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  build-audit:
+    name: Build Android arm64 ksud with UNVERIFIED A146P research .ko, report ONLY
+    runs-on: ubuntu-24.04
+    timeout-minutes: 65
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install host prerequisites
+        run: |
+          set -euo pipefail
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends git clang-18 llvm-18 lld-18 libclang-18-dev libssl-dev pkg-config
+      - uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r29
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-linux-android
+      - name: Download provenance-checked experimental module and stage exact KMI asset
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p work report
+          gh run download 38942607886 --repo wiredroid/Patch-Recovery --name A146P-stock-HEZB1-partial-GKI89-ABI-PREFLIGHT-NOT-FLASHABLE --dir work/ko-ci
+          KO="$(find work/ko-ci -type f -name A146P-GKI89-PARTIAL-KSUNEXT-UNVERIFIED-DO-NOT-LOAD.ko -print -quit)"
+          test -n "$KO" && test -s "$KO"
+          echo "3ed5fda0fd042af69f778876f223d3d803ae27042bcf3101d37d48cb5345ec0e  $KO" | sha256sum -c -
+          git clone --no-checkout --filter=blob:none https://github.com/KernelSU-Next/KernelSU-Next.git work/ksunext
+          git -C work/ksunext fetch --depth=1 origin 159bc7da4266fd9331f63e25901629db4b7bfff8
+          git -C work/ksunext checkout --detach FETCH_HEAD
+          test "$(git -C work/ksunext rev-parse HEAD)" = 159bc7da4266fd9331f63e25901629db4b7bfff8
+          ASSET=work/ksunext/userspace/ksud/bin/aarch64/android15-6.6_kernelsu.ko
+          cp "$KO" "$ASSET"
+          cmp "$KO" "$ASSET"
+          grep -q 'folder = "bin/aarch64"' work/ksunext/userspace/ksud/src/assets.rs
+          grep -q 'format!("{kmi}_kernelsu.ko")' work/ksunext/userspace/ksud/src/late_load.rs
+          sha256sum "$ASSET" | tee report/embedded-kmi-asset-sha256.txt
+          echo "asset_path=userspace/ksud/bin/aarch64/android15-6.6_kernelsu.ko" > report/embed-contract.txt
+          echo "research_module_source_run=38942607886" >> report/embed-contract.txt
+          echo "ksunext_commit=159bc7da4266fd9331f63e25901629db4b7bfff8" >> report/embed-contract.txt
+          printf '%s\n' 'EXPERIMENTAL .ko: NOT exact OEM ABI; not for insertion on stock, regardless of build result.' > report/DO-NOT-LOAD.txt
+      - name: Assemble upstream required bootstrap object
+        run: |
+          set -euo pipefail
+          clang-18 --target=aarch64-linux-gnu -c -nostdlib -o work/ksunext/userspace/ksud/.lkm_image_bootstrap.o work/ksunext/userspace/ksud/src/lkm_image_bootstrap.S
+          readelf -h work/ksunext/userspace/ksud/.lkm_image_bootstrap.o | grep 'Machine:.*AArch64'
+      - name: Compile pinned Android arm64 ksud from staged research-only KMI asset
+        run: |
+          set -euo pipefail
+          export LIBCLANG_PATH=/usr/lib/llvm-18/lib
+          export LLVM_CONFIG_PATH=/usr/bin/llvm-config-18
+          NDK="${ANDROID_NDK_ROOT:?setup-ndk did not configure ANDROID_NDK_ROOT}"
+          TOOLCHAIN="$NDK/toolchains/llvm/prebuilt/linux-x86_64"
+          test -x "$TOOLCHAIN/bin/aarch64-linux-android35-clang"
+          export CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER="$TOOLCHAIN/bin/aarch64-linux-android35-clang"
+          export CC_aarch64_linux_android="$CARGO_TARGET_AARCH64_LINUX_ANDROID_LINKER"
+          export AR_aarch64_linux_android="$TOOLCHAIN/bin/llvm-ar"
+          export BINDGEN_EXTRA_CLANG_ARGS_aarch64_linux_android="--sysroot=$TOOLCHAIN/sysroot -I$TOOLCHAIN/sysroot/usr/include/aarch64-linux-android -I$TOOLCHAIN/sysroot/usr/include"
+          export KSU_LKM_BOOTSTRAP_OBJECT="$PWD/work/ksunext/userspace/ksud/.lkm_image_bootstrap.o"
+          set +e
+          timeout 45m cargo build --locked --release --target aarch64-linux-android --manifest-path work/ksunext/userspace/ksud/Cargo.toml > report/cargo-android-ksud-build.log 2>&1
+          rc=$?
+          set -e
+          echo "KSUD_ANDROID_COMPILE_EXIT=$rc" | tee report/status.txt
+          if [ "$rc" -ne 0 ]; then
+            grep -n -m 50 -E 'error:|failed|Caused by|cannot|panic' report/cargo-android-ksud-build.log || true
+            tail -n 80 report/cargo-android-ksud-build.log
+            exit "$rc"
+          fi
+          BIN=work/ksunext/userspace/ksud/target/aarch64-linux-android/release/ksud
+          test -s "$BIN"
+          readelf -h "$BIN" | tee report/ksud-ELF-header.txt
+          readelf -h "$BIN" | grep 'Machine:.*AArch64'
+          sha256sum "$BIN" | tee report/experimental-ksud-sha256.txt
+          wc -c "$BIN" | tee report/experimental-ksud-size.txt
+          grep -q -F 'android15-6.6_kernelsu.ko' work/ksunext/userspace/ksud/src/late_load.rs || true
+          printf '%s\n' 'BUILD ONLY; research ksud and experimental .ko intentionally NOT uploaded and NOT safe to execute or package on a phone.' > report/NOT-READY-TO-RUN.txt
+          tail -n 35 report/cargo-android-ksud-build.log
+      - name: Upload only logs/hashes, never packaged ksud, APK or .ko
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: A146P-ksud-aarch64-EMBED-RESEARCH-REPORT-ONLY
+          path: report/
+          if-no-files-found: warn
