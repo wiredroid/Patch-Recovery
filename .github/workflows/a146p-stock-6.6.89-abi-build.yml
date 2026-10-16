@@ -5,6 +5,7 @@ on:
     paths:
       - .github/workflows/a146p-stock-6.6.89-abi-build.yml
       - 'a146p-stock/patches/**'
+      - 'a146p-stock/tools/audit-module-import-crcs.py'
   workflow_dispatch:
 permissions:
   contents: read
@@ -139,6 +140,23 @@ jobs:
           for k in ['CONFIG_ARM64_4K_PAGES','CONFIG_MODVERSIONS','CONFIG_DEBUG_INFO_BTF','CONFIG_SECURITY_DEFEX','CONFIG_SAMSUNG_GKI_KERNEL','CONFIG_LTO_NONE']:
               print(k,'stock=',target.get(k),'candidate=',new.get(k))
           PY
+      - name: Set exact A146P stock release METADATA (NOT stock ABI equivalence)
+        run: |
+          set -euo pipefail
+          export PATH=/usr/lib/llvm-18/bin:$PATH
+          # Reconstructed GKI has a different git SHA/SCM string than OEM.
+          # This sets a matching *label only* for reproducible module diagnostics.
+          # Do not interpret a matching vermagic as proof of Samsung OEM ABI.
+          export LOCALVERSION=''
+          KDIR="$PWD/work/google89"
+          OUT="$PWD/work/build"
+          cp "$OUT/.config" report/pre-metadata-override-research-config.txt
+          "$KDIR/scripts/config" --file "$OUT/.config" --set-str LOCALVERSION '-android15-8-abA146PXXUHEZB1-4k' -d LOCALVERSION_AUTO
+          make -C "$KDIR" O="$OUT" ARCH=arm64 LLVM=1 CC=clang LD=ld.lld olddefconfig > report/research-release-olddefconfig.log 2>&1
+          make -s -C "$KDIR" O="$OUT" ARCH=arm64 LLVM=1 CC=clang LD=ld.lld kernelrelease | tee report/research-labelled-kernelrelease.txt
+          test "$(cat report/research-labelled-kernelrelease.txt)" = "6.6.89-android15-8-abA146PXXUHEZB1-4k"
+          printf '%s\n' 'RESEARCH-ONLY: Matching kernelrelease is metadata, NOT an OEM kernel/ABI match. CONFIG_LOCALVERSION_AUTO deliberately differs from OEM to suppress candidate SCM suffix. DO NOT LOAD the resulting module on stock.' > report/RELEASE-LABEL-NOT-STOCK-VALIDATION.txt
+          echo 'LOCALVERSION=' >> "$GITHUB_ENV"
       - name: Substitute local development module-signing key ONLY for research build
         run: |
           set -euo pipefail
@@ -276,6 +294,14 @@ jobs:
           else
             echo 'No resulting kernelsu.ko; inspect module-build.log' > report/research-module/NO-MODULE.txt
           fi
+      - name: Fail-closed audit of candidate CRCs and exact target vermagic (NOT OEM)
+        run: |
+          set -euo pipefail
+          KSU="$PWD/work/ksunext/kernel"
+          test -s "$KSU/kernelsu.ko"
+          test -s report/research-module/CANDIDATE-Module.symvers
+          python3 a146p-stock/tools/audit-module-import-crcs.py --module "$KSU/kernelsu.ko" --candidate-symvers report/research-module/CANDIDATE-Module.symvers --expected-release '6.6.89-android15-8-abA146PXXUHEZB1-4k' --output report/research-module/strict-crc-audit
+          echo 'PASS here confirms RESEARCH CRC consistency and intended release label only; actual OEM CRCs, Samsung module protections, and GhostLock execution remain UNKNOWN.' | tee report/research-module/NOT-OEM-ABI-PROOF.txt
       - name: Upload all diagnostics whether compilation passes or fails
         if: always()
         uses: actions/upload-artifact@v4
