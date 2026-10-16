@@ -38,7 +38,7 @@ def version_records(data):
     result = {}
     for offset in range(0, len(data), 64):
         crc = struct.unpack_from("<Q", data, offset)[0] & 0xffffffff
-        name = data[offset + 8:offset + 64].split(b"\\0", 1)[0].decode("ascii")
+        name = data[offset + 8:offset + 64].split(b"\0", 1)[0].decode("ascii")
         if not name or name in result:
             raise ValueError("Duplicate or empty __versions symbol: " + name)
         result[name] = crc
@@ -65,7 +65,7 @@ def audit(args):
         raise ValueError("No imported ELF symbols found")
     exports = read_symvers(args.candidate_symvers)
     versions = version_records(section_bytes(args.module, "__versions"))
-    modinfo = section_bytes(args.module, ".modinfo").split(b"\\0")
+    modinfo = section_bytes(args.module, ".modinfo").split(b"\0")
     fields = [x[len(b"vermagic="):].decode("ascii") for x in modinfo if x.startswith(b"vermagic=")]
     if len(fields) != 1:
         raise ValueError("Missing or ambiguous module vermagic")
