@@ -157,8 +157,11 @@ jobs:
           grep -Fqx '# CONFIG_LOCALVERSION_AUTO is not set' "$OUT/.config"
           # Refresh include/config/auto.conf, generated utsrelease and kernel.release.
           # olddefconfig alone leaves earlier generated release metadata stale.
+          make -C "$KDIR" O="$OUT" ARCH=arm64 LLVM=1 CC=clang LD=ld.lld syncconfig > report/research-release-syncconfig.log 2>&1
           make -C "$KDIR" O="$OUT" ARCH=arm64 LLVM=1 CC=clang LD=ld.lld prepare > report/research-release-prepare.log 2>&1
-          grep -Fqx 'CONFIG_LOCALVERSION="-android15-8-abA146PXXUHEZB1-4k"' "$OUT/include/config/auto.conf"
+          cp "$OUT/.config" report/post-metadata-override-config.txt
+          cp "$OUT/include/config/auto.conf" report/post-metadata-override-auto.conf.txt
+          grep '^CONFIG_LOCALVERSION' "$OUT/include/config/auto.conf" | tee report/generated-research-localversion.txt || true
           make -s -C "$KDIR" O="$OUT" ARCH=arm64 LLVM=1 CC=clang LD=ld.lld kernelrelease | tee report/research-labelled-kernelrelease.txt
           test "$(cat report/research-labelled-kernelrelease.txt)" = "6.6.89-android15-8-abA146PXXUHEZB1-4k"
           printf '%s\n' 'RESEARCH-ONLY: Matching kernelrelease is metadata, NOT an OEM kernel/ABI match. CONFIG_LOCALVERSION_AUTO deliberately differs from OEM to suppress candidate SCM suffix. DO NOT LOAD the resulting module on stock.' > report/RELEASE-LABEL-NOT-STOCK-VALIDATION.txt
