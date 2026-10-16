@@ -39,8 +39,10 @@ jobs:
           set -euo pipefail
           echo "ANDROID_HOME=${ANDROID_HOME:-unset}" | tee report/android-sdk-path.txt
           test -d "${ANDROID_HOME:?Android SDK missing from GitHub hosted runner}"
-          test -x "$(command -v sdkmanager)"
-          sdkmanager --version | tee report/android-sdkmanager-version.txt
+          SDKMANAGER="$(find "$ANDROID_HOME/cmdline-tools" -maxdepth 4 -type f -name sdkmanager 2>/dev/null | sort -V | tail -n 1)"
+          test -n "$SDKMANAGER" && test -x "$SDKMANAGER"
+          "$SDKMANAGER" --version | tee report/android-sdkmanager-version.txt
+          find "$ANDROID_HOME/platforms" -mindepth 1 -maxdepth 1 -type d -printf "%f\\n" 2>/dev/null | sort -V | tail -n 15 | tee report/installed-platforms.txt || true
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v4
       - name: Kotlin integration compile and unit tests (NO APK)
