@@ -1,0 +1,23 @@
+diff --git a/app/src/main/AndroidManifest.xml b/app/src/main/AndroidManifest.xml
+--- a/app/src/main/AndroidManifest.xml
++++ b/app/src/main/AndroidManifest.xml
+@@ -5,6 +5,7 @@
+     <uses-permission android:name="android.permission.INTERNET" />
+     <queries>
+         <package android:name="moe.shizuku.privileged.api" />
++        <package android:name="com.rifsxd.ksunext" />
+         <package android:name="me.weishu.kernelsu.pr" />
+         <package android:name="me.weishu.kernelsu" />
+         <package android:name="com.resukisu.resukisu" />
+diff --git a/app/src/main/kotlin/com/ghostlock/app/data/AndroidGhostlockRepository.kt b/app/src/main/kotlin/com/ghostlock/app/data/AndroidGhostlockRepository.kt
+--- a/app/src/main/kotlin/com/ghostlock/app/data/AndroidGhostlockRepository.kt
++++ b/app/src/main/kotlin/com/ghostlock/app/data/AndroidGhostlockRepository.kt
+@@ -1016,7 +1016,7 @@
+     private fun firstValidProperty(vararg keys: String): String? = keys.asSequence().firstNotNullOfOrNull { validDeviceName(systemProperty(it)) }
+
+     private fun prepareKsud(workDir: File, onLog: (String) -> Unit): File? {
+-        val packages = listOf("me.weishu.kernelsu.pr", "me.weishu.kernelsu", "com.resukisu.resukisu", "org.bakasu.bakasu", "com.kowx712.supermanager")
++        val packages = listOf("com.rifsxd.ksunext", "me.weishu.kernelsu.pr", "me.weishu.kernelsu", "com.resukisu.resukisu", "org.bakasu.bakasu", "com.kowx712.supermanager")
+         var installed = false
+         for (packageName in packages) {
+             val appInfo = runCatching { appContext.packageManager.getApplicationInfo(packageName, 0) }.getOrNull() ?: continue
