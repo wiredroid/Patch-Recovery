@@ -8,6 +8,7 @@ Matching version strings do not independently authenticate a module's origin.
 import argparse
 from collections import defaultdict
 import json
+import os
 from pathlib import Path
 import struct
 import sys
@@ -98,17 +99,44 @@ def main():
     p.add_argument("--output", default="/sdcard/Download/A146P-OEM-vendor-module-CRC-evidence.json")
     args = p.parse_args()
     paths = {}
+    directory_errors = []
+    missing_roots = []
     for root in args.roots:
         start = Path(root)
-        if not start.exists():
-            continue
-        for ko in (start.rglob("*.ko") if start.is_dir() else [start]):
-            try:
-                paths.setdefault(str(ko.resolve()), ko)
-            except OSError:
+        try:
+            # os.path.exists normally returns False for inaccessible paths;
+            # os.scandir() below distinguishes unreadable from missing roots.
+            if not os.path.exists(start):
+                if os.path.lexists(start):
+                    directory_errors.append({"directory": root, "reason": "present but inaccessible"})
+                else:
+                    missing_roots.append(root)
                 continue
-            if len(paths) >= 2000:
-                break
+            if not start.is_dir():
+                if start.suffix == ".ko":
+                    paths.setdefault(os.path.realpath(start), start)
+                continue
+
+            def on_walk_error(err):
+                directory_errors.append({
+                    "directory": err.filename or root,
+                    "reason": str(err),
+                })
+
+            # Unlike Path.rglob(), os.walk(onerror=...) reports inaccessible
+            # subdirectories without terminating the entire evidence audit.
+            for current, subdirs, filenames in os.walk(start, onerror=on_walk_error):
+                for name in filenames:
+                    if not name.endswith(".ko"):
+                        continue
+                    ko = Path(current) / name
+                    paths.setdefault(os.path.realpath(ko), ko)
+                    if len(paths) >= 2000:
+                        break
+                if len(paths) >= 2000:
+                    break
+        except OSError as err:
+            directory_errors.append({"directory": root, "reason": str(err)})
     seen = defaultdict(list)
     same = []
     skipped = defaultdict(int)
@@ -136,6 +164,8 @@ def main():
         "matching_release_modules": same,
         "nonmatching_release_counts": dict(skipped),
         "parse_errors": errors,
+        "directory_errors": directory_errors,
+        "missing_roots": missing_roots,
         "unique_symbol_count": len(seen),
         "conflicting_symbols": conflicts,
         "symbols": {s: {"crcs": sorted({r["crc"] for r in rows}),
@@ -148,6 +178,7 @@ def main():
     print("Scanned:", len(paths), " Matching stock-release modules:", len(same))
     print("CRC symbols:", len(seen), " Conflicts:", len(conflicts))
     print("Other kernel releases:", dict(skipped))
+    print("Unreadable directories:", len(directory_errors), " Missing roots:", len(missing_roots))
     print("Report:", dest)
     print("NOT A STOCK MODULE LOAD OR OEM SIGNING VALIDATION")
 
