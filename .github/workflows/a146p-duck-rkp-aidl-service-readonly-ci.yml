@@ -1,0 +1,31 @@
+name: A146P Duck RKP exact AIDL service name read-only probe lint
+on:
+  push:
+    branches: [a146p-ksunext-stock-build]
+    paths:
+      - a146p-stock/tools/a146p-duck-rkp-aidl-service-readonly.sh
+      - .github/workflows/a146p-duck-rkp-aidl-service-readonly-ci.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  static-diagnostic-test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: POSIX shell syntax + non-mutating command inventory
+        run: |
+          set -euo pipefail
+          p=a146p-stock/tools/a146p-duck-rkp-aidl-service-readonly.sh
+          test -s "$p"
+          sh -n "$p"
+          grep -Fq 'service check "$name"' "$p"
+          grep -Fq 'IRemotelyProvisionedComponent/default' "$p"
+          grep -Fq '/apex/*/etc/vintf/manifest.xml' "$p"
+          grep -Fq 'No attestation keys, keybox, RKP CSR' "$p"
+          if grep -Eq '^[[:space:]]*(insmod|modprobe|setprop|resetprop|reboot|mount|dd|am[[:space:]]+start|keytool|openssl[[:space:]]+req|curl|wget|adb[[:space:]]+root|cmd[[:space:]]+remote_provisioning)[[:space:]]' "$p"; then
+            echo 'Disallowed state-changing operation found in read-only script'
+            exit 1
+          fi
+          echo 'PASS: shell syntax, explicit HAL checks, no prohibited state-changing commands'
