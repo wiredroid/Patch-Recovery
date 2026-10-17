@@ -1,0 +1,62 @@
+name: A146P BK-KSU Samsung RKP KDP DEFEX evidence source audit
+on:
+  push:
+    branches: [a146p-ksunext-stock-build]
+    paths:
+      - .github/workflows/a146p-bk-samsung-source-hardening-audit.yml
+      - a146p-stock/tools/audit-bk-v114-samsung-compat.py
+      - a146p-stock/ghostlock/A146P-HEZB1-STOCK-DEFEX-KDP-BTF-EVIDENCE-2026-10-18.json
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  pinned-static-audit:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Checkout BK-KSU v1.1.4 and original KSU Next 3.4.2 pinned source
+        run: |
+          set -euo pipefail
+          mkdir -p work report
+          git clone --filter=blob:none --no-checkout https://github.com/bklynali/BK-KSU.git work/bk
+          git -C work/bk fetch --depth=1 origin 25c8d24ea06f0f8e19eda4d761e98d3e8c417131
+          git -C work/bk checkout --detach FETCH_HEAD
+          test "$(git -C work/bk rev-parse HEAD)" = 25c8d24ea06f0f8e19eda4d761e98d3e8c417131
+          git clone --filter=blob:none --no-checkout https://github.com/KernelSU-Next/KernelSU-Next.git work/next
+          git -C work/next fetch --depth=1 origin 159bc7da4266fd9331f63e25901629db4b7bfff8
+          git -C work/next checkout --detach FETCH_HEAD
+          test "$(git -C work/next rev-parse HEAD)" = 159bc7da4266fd9331f63e25901629db4b7bfff8
+          echo 'SOURCE-LEVEL COMPARISON ONLY: NO EXPLOIT/ROOT, KO EXECUTION, FIRMWARE OR APK' > report/DO-NOT-LOAD.txt
+      - name: Verify current A146P compatibility build flags and genuine stock configuration
+        run: |
+          set -euo pipefail
+          grep -Fq 'CONFIG_KSU_SAMSUNG_RKP=y CONFIG_KSU_SAMSUNG_DEFEX=y CONFIG_KSU_SAMSUNG_NO_PATCH_TEXT=y CONFIG_KSU_SAMSUNG_KDP=n' .github/workflows/a146p-stock-6.6.89-abi-build.yml
+          grep -q '^CONFIG_SECURITY_DEFEX=y' a146p-stock/stock-A146PXXUHEZB1-6.6.89.config
+          grep -q '^CONFIG_MODULE_SIG_PROTECT=y' a146p-stock/stock-A146PXXUHEZB1-6.6.89.config
+          grep -q '^CONFIG_KPROBES=y' a146p-stock/stock-A146PXXUHEZB1-6.6.89.config
+          grep -q '^CONFIG_KRETPROBES=y' a146p-stock/stock-A146PXXUHEZB1-6.6.89.config
+          grep -q '^CONFIG_MODVERSIONS=y' a146p-stock/stock-A146PXXUHEZB1-6.6.89.config
+      - name: Compare audited original Samsung BTF to pinned BK/KSU Next hardening source
+        run: |
+          set -euo pipefail
+          python3 -m py_compile a146p-stock/tools/audit-bk-v114-samsung-compat.py
+          python3 a146p-stock/tools/audit-bk-v114-samsung-compat.py --bk-root work/bk --ksunext-root work/next --stock-btf-evidence a146p-stock/ghostlock/A146P-HEZB1-STOCK-DEFEX-KDP-BTF-EVIDENCE-2026-10-18.json --output report/source-comparison
+          python3 - <<'PY'
+          import json
+          d=json.load(open('report/source-comparison/samsung-source-compatibility.json'))
+          assert d['factory_locked_samsung_root_proven'] is False
+          assert all(not x for x in d['bk_has_named_samsung_kconfig_options'].values())
+          assert all(d['ksunext_has_named_samsung_kconfig_options'].values())
+          assert d['a146p_research_flags_already_selected']['KSU_SAMSUNG_KDP'] is False
+          assert d['source_checks']['bk_generic_arm64_fixmap_patch']
+          assert d['source_checks']['ksunext_samsung_rkp_kprobes']
+          print('PASS: release claims separated from pinned source implementation and original HEZB1 BTF evidence')
+          PY
+      - name: Publish read-only reports, not executable module artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: A146P-BK-KSU-SAMSUNG-HARDENING-SOURCE-RESEARCH-REPORT-ONLY
+          path: report/
+          if-no-files-found: warn
