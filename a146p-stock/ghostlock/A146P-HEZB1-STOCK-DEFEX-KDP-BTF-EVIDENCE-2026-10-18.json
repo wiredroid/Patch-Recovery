@@ -1,0 +1,41 @@
+{
+  "source": "Original owner-provided, SHA256-verified Samsung A146PXXUHEZB1 boot image embedded BTF; read-only offline extraction",
+  "stock_boot_sha256": "0fa1f56be55b5f1c0aaac5855ee0ec9c1f388fe101202a13790b7694d48c20f9",
+  "embedded_btf_sha256": "169aa6aac6c8ff3d78bbda9d1b0942da12c84c2f491fdcbb504c36260090f67e",
+  "stock_kernel_release": "6.6.89-android15-8-abA146PXXUHEZB1-4k",
+  "btf_function_proto_count": 61049,
+  "target_function_presence": {
+    "get_task_creds": {
+      "present": true,
+      "btf_type_id": 56528,
+      "signature": "void get_task_creds(struct task_struct * p, unsigned int * uid_ptr, unsigned int * fsuid_ptr, unsigned int * egid_ptr, unsigned short * cred_flags_ptr);"
+    },
+    "set_task_creds": {
+      "present": true,
+      "btf_type_id": 56530,
+      "signature": "int set_task_creds(struct task_struct * p, unsigned int uid, unsigned int fsuid, unsigned int egid, unsigned short cred_flags);"
+    },
+    "task_defex_enforce": {
+      "present": true,
+      "btf_type_id": 56422,
+      "signature": "int task_defex_enforce(struct task_struct * p, struct file * f, int syscall, ...);"
+    },
+    "prepare_ro_creds": {
+      "present": false
+    },
+    "kdp_assign_pgd": {
+      "present": false
+    },
+    "kdp_usecount_dec_and_test": {
+      "present": false
+    }
+  },
+  "important_limitations": [
+    "BTF function presence does not imply EXPORT_SYMBOL or runtime callable address.",
+    "BTF function absence does not conclusively establish that no function exists at runtime.",
+    "Samsung DEFEX function signature presence supports targeted static compatibility, not proven functioning DEFEX bypass.",
+    "CONFIG_SECURITY_DEFEX=y and CONFIG_MODULE_SIG_PROTECT=y are original stock config settings.",
+    "User's currently booted Physwizz kernel is not the original Samsung kernel.",
+    "No live bootloader-locked kernel insertion has been performed."
+  ]
+}
