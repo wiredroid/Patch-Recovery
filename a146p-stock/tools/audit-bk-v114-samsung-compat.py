@@ -40,6 +40,7 @@ def report(args):
 
     bkc = read_file(bk, "kernel/Kconfig")
     knc = read_file(kn, "kernel/Kconfig")
+    knbuild = read_file(kn, "kernel/Kbuild")
     bkpatch = read_file(bk, "kernel/hook/arm64/patch_memory.c")
     knpatch = read_file(kn, "kernel/hook/arm64/patch_memory.c")
     bkarm = read_file(bk, "kernel/hook/arm64/syscall_hook.c")
@@ -61,6 +62,7 @@ def report(args):
         "bk_late_load_uses_init_module": "ksuinit::load_module" in bklate and "init_module(&buffer" in bkinit,
         "bk_late_load_reads_kallsyms": '"/proc/kallsyms"' in bkinit,
         "bk_ksuinit_symbol_loader_identical_to_ksunext": bkinit == kninit,
+        "ksunext_ext_module_samsung_defines": all(("ccflags-y += -DCONFIG_" + option + "=1") in knbuild for option in SAMSUNG_OPTIONS),
         "ksunext_samsung_rkp_kprobes": "register_kprobe(" in knrkp and "register_kretprobe(" in knrkp,
         "ksunext_samsung_defex_helpers": all(f in kndefex for f in DEFEX_FUNCTIONS),
         "ksunext_samsung_kdp_helpers": all(f in knkdp for f in KDP_FUNCTIONS),
