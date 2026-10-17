@@ -1,0 +1,48 @@
+name: A146P Duck ToolBox MediaTek RKP read-only capability preflight tests
+on:
+  push:
+    branches: [a146p-ksunext-stock-build]
+    paths:
+      - a146p-stock/tools/a146p-duck-rkp-readonly-preflight.sh
+      - .github/workflows/a146p-duck-rkp-mediatek-preflight-ci.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  mock-mediatek:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: Syntax and MOCK MediaTek SM-A146P property test (no device)
+        shell: bash
+        run: |
+          set -euo pipefail
+          SCRIPT=a146p-stock/tools/a146p-duck-rkp-readonly-preflight.sh
+          bash -n "$SCRIPT"
+          mkdir -p mock report
+          cat > mock/getprop <<'EOF'
+          #!/bin/sh
+          case "$1" in
+            ro.product.model) printf '%s\n' SM-A146P ;;
+            ro.soc.manufacturer) printf '%s\n' MediaTek ;;
+            ro.vendor.soc.manufacturer) printf '%s\n' MediaTek ;;
+            ro.soc.model) printf '%s\n' MT6833 ;;
+            ro.hardware) printf '%s\n' mt6833 ;;
+            ro.build.version.release) printf '%s\n' 15 ;;
+            ro.boot.verifiedbootstate) printf '%s\n' orange ;;
+          esac
+          EOF
+          chmod +x mock/getprop
+          PATH="$PWD/mock:$PATH" sh "$SCRIPT" > report/MOCK-A146P-CONSOLE-NOT-ACTUAL-PHONE.txt
+          grep -Fx 'ro.soc.manufacturer = MediaTek' report/MOCK-A146P-CONSOLE-NOT-ACTUAL-PHONE.txt
+          grep -Fx 'ro.soc.model = MT6833' report/MOCK-A146P-CONSOLE-NOT-ACTUAL-PHONE.txt
+          grep -F 'currently requires Qualcomm' report/MOCK-A146P-CONSOLE-NOT-ACTUAL-PHONE.txt
+          grep -F 'No private keys' report/MOCK-A146P-CONSOLE-NOT-ACTUAL-PHONE.txt
+          echo "PASS: shell syntax, mock MT6833 props and read-only scope."
+      - name: Upload diagnostic mock output ONLY
+        uses: actions/upload-artifact@v4
+        with:
+          name: A146P-DUCK-MEDIATEK-MOCK-CAPABILITY-PREFLIGHT-NOT-DEVICE-DATA
+          path: report/
+          if-no-files-found: error
