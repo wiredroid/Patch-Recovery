@@ -1,0 +1,32 @@
+name: A146P Duck RKP VINTF read-only probe script tests
+on:
+  push:
+    branches: [a146p-ksunext-stock-build]
+    paths:
+      - a146p-stock/tools/a146p-duck-rkp-vintf-readonly.sh
+      - .github/workflows/a146p-duck-rkp-vintf-readonly-ci.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  offline-probe-test:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 8
+    steps:
+      - uses: actions/checkout@v4
+      - name: POSIX shell syntax and offline non-Android behavior
+        run: |
+          set -euo pipefail
+          testfile=a146p-stock/tools/a146p-duck-rkp-vintf-readonly.sh
+          sh -n "$testfile"
+          mkdir -p report
+          sh "$testfile" > report/LINUX-TEST-NOT-DEVICE-EVIDENCE.txt
+          grep -q 'VINTF/AIDL READ-ONLY FOLLOW-UP' report/LINUX-TEST-NOT-DEVICE-EVIDENCE.txt
+          grep -q 'Duck rkp-device current source still requires Qualcomm SoC' report/LINUX-TEST-NOT-DEVICE-EVIDENCE.txt
+          grep -q 'performed no KeyMint/TEE/RKP requests' report/LINUX-TEST-NOT-DEVICE-EVIDENCE.txt
+          echo 'PASS: POSIX syntax, no mobile dependencies required for offline test, correct non-invasive diagnostic labeling' | tee report/SYNTAX-PASS.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: A146P-Duck-RKP-VINTF-PROBE-OFFLINE-SYNTAX-ONLY
+          path: report/
+          if-no-files-found: error
