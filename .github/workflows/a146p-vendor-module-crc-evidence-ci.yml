@@ -1,0 +1,83 @@
+name: A146P stock vendor-module CRC reference comparison tests
+on:
+  push:
+    branches: [a146p-ksunext-stock-build]
+    paths:
+      - .github/workflows/a146p-vendor-module-crc-evidence-ci.yml
+      - a146p-stock/tools/compare-oem-vendor-module-crcs.py
+      - a146p-stock/tools/test-compare-oem-vendor-module-crcs.py
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  evidence-tests:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Test all known synthetic CRC edge cases
+        run: |
+          set -euo pipefail
+          python3 -m unittest discover -s a146p-stock/tools -p 'test-compare-oem-vendor-module-crcs.py' -v
+      - name: Download genuine RESEARCH candidate .ko import table
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p work report
+          gh run download 38967262315 --repo wiredroid/Patch-Recovery --name A146P-stock-HEZB1-partial-GKI89-ABI-PREFLIGHT-NOT-FLASHABLE --dir work
+          test -s work/research-module/strict-crc-audit/candidate-import-audit.tsv
+          echo 'Test references generated below are SYNTHETIC, not real Samsung OEM CRCs.' > report/TEST-REFERENCES-ARE-SYNTHETIC.txt
+      - name: Exercise 219 actual research imports with SYNTHETIC vendor reference
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import csv,json
+          from pathlib import Path
+          p=Path('work/research-module/strict-crc-audit/candidate-import-audit.tsv')
+          rows=list(csv.DictReader(p.open(),delimiter='\t'))
+          assert len(rows)==219
+          sample=[r for r in rows if r['module_crc']][:3]
+          assert len(sample)==3
+          evidence={
+            'expected_release':'6.6.89-android15-8-abA146PXXUHEZB1-4k',
+            'matching_release_modules':[{'file':'SYNTHETIC-NOT-OEM.ko','symbol_count':3}],
+            'conflicting_symbols':{},
+            'symbols':{r['symbol']:{'crcs':[r['module_crc']],
+              'module_names':['SYNTHETIC-NOT-OEM.ko']} for r in sample}}
+          Path('work/synthetic.json').write_text(json.dumps(evidence))
+          PY
+          python3 a146p-stock/tools/compare-oem-vendor-module-crcs.py --candidate-tsv work/research-module/strict-crc-audit/candidate-import-audit.tsv --reference-json work/synthetic.json --output report/synthetic-success
+          python3 - <<'PY'
+          import json
+          d=json.load(open('report/synthetic-success/vendor-crc-summary.json'))
+          assert d['candidate_import_count']==219
+          assert d['comparison_counts']['MATCH_TO_INSTALLED_MODULE_REFERENCE_NOT_OEM_PROOF']==3
+          assert not d['oem_crc_verified'] and not d['ready_to_load']
+          print('PASS: 219 real research references parsed; 3 SYNTHETIC matches')
+          PY
+      - name: Reject a deliberately corrupted SYNTHETIC CRC
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          d=json.loads(Path('work/synthetic.json').read_text())
+          first=next(iter(d['symbols']))
+          original=int(d['symbols'][first]['crcs'][0],16)
+          d['symbols'][first]['crcs']=[f'0x{original ^ 1:08x}']
+          Path('work/synthetic-wrong.json').write_text(json.dumps(d))
+          PY
+          if python3 a146p-stock/tools/compare-oem-vendor-module-crcs.py --candidate-tsv work/research-module/strict-crc-audit/candidate-import-audit.tsv --reference-json work/synthetic-wrong.json --output report/intentional-error; then
+            echo 'ERROR: invalid CRC accepted'
+            exit 1
+          fi
+          echo 'PASS: mismatch rejected' > report/FAIL-CLOSED-VERIFIED.txt
+      - name: Upload report artifacts only, no binary
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: A146P-CRC-COMPARISON-TEST-REPORT-ONLY
+          path: report/
+          if-no-files-found: warn
