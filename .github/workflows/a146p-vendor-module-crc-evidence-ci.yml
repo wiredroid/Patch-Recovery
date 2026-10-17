@@ -19,7 +19,7 @@ jobs:
       - name: Test all known synthetic CRC edge cases
         run: |
           set -euo pipefail
-          python3 -m unittest discover -s a146p-stock/tools -p 'test-compare-oem-vendor-module-crcs.py' -v
+          python3 a146p-stock/tools/test-compare-oem-vendor-module-crcs.py -v
       - name: Download genuine RESEARCH candidate .ko import table
         env:
           GH_TOKEN: ${{ github.token }}
