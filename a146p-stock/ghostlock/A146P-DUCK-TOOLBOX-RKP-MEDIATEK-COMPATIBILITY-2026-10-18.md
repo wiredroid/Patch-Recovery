@@ -52,3 +52,20 @@ Google's current Play Integrity documentation (https://developer.android.com/goo
 For a MediaTek port, first identify the actual KeyMint HAL implementation/transport and whether a vendor-supported interface authorizes the requested operation; then validate security properties on test hardware. Never recast `qualcomm_soc_required` as a cosmetic flag, or claim device-backed issuance on MTK from a Qualcomm-only backend.
 
 **Bottom line: generic Duck Toolbox features are suitable for device-specific compatibility diagnostics, but its currently published device RKP issuer cannot run as described on the SM-A146P MT6833.**
+
+
+## Follow-up: upstream v0.1.6 AIDL V1 eligibility and read-only MT6833 probe
+
+I reviewed the exact pinned `v0.1.6-stable` `soc.rs`, `status.rs`, `issuance.rs`, `keymint.rs`, `v1/discovery.rs`, and `RkpV1Bridge.java`. The Android AIDL V1 adapter references `android.hardware.security.keymint.IRemotelyProvisionedComponent/default`, `getHardwareInfo` and `generateCertificateRequest`. **It is NOT a generic arbitrary-key signing endpoint**; Duck’s V1 implementation assumes a Qualcomm PureSoft/zero-HBK behavior, and `issuance::blockers_for` never removes `qualcomm_soc_required` for explicit `--protocol v1` on MediaTek. The V2 and native V1 vendor commands still require Qualcomm KeymasterUtils and/or `/dev/smcinvoke`. Removing the SoC gate alone provides no functional MediaTek backend.
+
+An additional [read-only diagnostic shell probe](../tools/a146p-duck-rkp-readonly-probe.sh) now captures only public SoC/Android metadata, detected hardware-library filenames and Binder service names. The script does not call trusted applications, manufacture keyboxes, query device serials, collect key material, or contact Google. Its POSIX shell syntax and a **synthetic MediaTek + Binder mock** passed [GitHub CI #39068294855](https://github.com/wiredroid/Patch-Recovery/actions/runs/39068294855).
+
+**Run on the actual Physwizz-rooted phone without switching kernels** (Termux; no `su` needed for initial metadata):
+
+```sh
+curl -fL "https://raw.githubusercontent.com/wiredroid/Patch-Recovery/a146p-ksunext-stock-build/a146p-stock/tools/a146p-duck-rkp-readonly-probe.sh" -o "$HOME/a146p-duck-rkp-readonly-probe.sh" && sh "$HOME/a146p-duck-rkp-readonly-probe.sh" | tee "/sdcard/Download/A146P-Duck-RKP-probe.txt"
+```
+
+Collect `/sdcard/Download/A146P-Duck-RKP-probe.txt` to check whether an actual remotely-provisioned-component service exists, which HAL version it may use, and which KeyMint/TEE vendor files are visible. Rooted Physwizz runtime evidence **does not prove** how stock locked-boot firmware behaves. A visible standard Android RKP HAL indicates normal remote provisioning support, not a software-key-signing vulnerability. Any real MediaTek support must involve an independently established compatible, authorized KeyMint transport and verification of its security properties before provisioning can be considered.
+
+Keep private keys, hardware attestation blobs, keybox.xml, CSR payloads and serial/IMEI out of shared reports. Neither Samsung Knox RKP support in KernelSU Next nor Duck’s attestation tooling guarantees Play Integrity Strong.
