@@ -1,0 +1,97 @@
+name: A146P BK-KSU 1.1.4 module vs verified OEM-CRC-matched KernelSU Next
+on:
+  push:
+    branches: [a146p-ksunext-stock-build]
+    paths: [.github/workflows/a146p-bk-ksu-v114-module-compare.yml]
+  workflow_dispatch:
+permissions:
+  contents: read
+  actions: read
+jobs:
+  static-elf-comparison:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - name: Acquire checksummed upstream BK-KSU v1.1.4 and prior A146P research module
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p work report
+          curl --fail --location --retry 3 -o work/BK-KSU-v1.1.4-android15-6.6-UNVERIFIED.ko 'https://github.com/bklynali/BK-KSU/releases/download/v1.1.4/android15-6.6_kernelsu.ko'
+          test "$(wc -c < work/BK-KSU-v1.1.4-android15-6.6-UNVERIFIED.ko)" = 466480
+          gh run download 38967262315 --repo wiredroid/Patch-Recovery --name A146P-stock-HEZB1-partial-GKI89-ABI-PREFLIGHT-NOT-FLASHABLE --dir work/old
+          find work/old -type f -name 'A146P-GKI89-PARTIAL-KSUNEXT-UNVERIFIED-DO-NOT-LOAD.ko' -print
+          test -s work/old/research-module/BINARY-DO-NOT-LOAD/A146P-GKI89-PARTIAL-KSUNEXT-UNVERIFIED-DO-NOT-LOAD.ko
+          sha256sum work/BK-KSU-v1.1.4-android15-6.6-UNVERIFIED.ko work/old/research-module/BINARY-DO-NOT-LOAD/A146P-GKI89-PARTIAL-KSUNEXT-UNVERIFIED-DO-NOT-LOAD.ko > report/ELF-provenance-sha256.txt
+          cat > report/RESEARCH-NOT-READY-TO-LOAD.txt <<'EOF'
+          Research static audit of publicly downloaded BK-KSU 1.1.4 and A146P pinned CI .ko only.
+          NEVER load either on stock Samsung or relock bootloader. No module binaries distributed by CI.
+          EOF
+      - name: Read-only symbol and module-version audit
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import csv, importlib.util, json, pathlib, subprocess
+          root=pathlib.Path('.')
+          src=root/'a146p-stock/tools/extract-installed-oem-module-crcs.py'
+          spec=importlib.util.spec_from_file_location("oem_reader", src)
+          parser=importlib.util.module_from_spec(spec); spec.loader.exec_module(parser)
+          bk=root/'work/BK-KSU-v1.1.4-android15-6.6-UNVERIFIED.ko'
+          prior=root/'work/old/research-module/BINARY-DO-NOT-LOAD/A146P-GKI89-PARTIAL-KSUNEXT-UNVERIFIED-DO-NOT-LOAD.ko'
+          dst=root/'report'
+          summary={}
+          for key,p in [('bk_ksu_v114',bk),('a146p_reconstruction_ksunext',prior)]:
+            release,versions=parser.decode_mod(p)
+            symbol_lines=subprocess.check_output(['nm','-u',str(p)],text=True).splitlines()
+            imports=sorted(set(line.split()[-1] for line in symbol_lines if line.strip()))
+            summary[key]={'vermagic_release':release, 'module_size':p.stat().st_size,
+              'undefined_import_count':len(imports),'crc_record_count':len(versions),
+              'module_layout_crc':versions.get('module_layout'),
+              'import_without_crc_count':sum(x not in versions for x in imports),
+              'imports':imports,'crcs':versions}
+          b=summary['bk_ksu_v114']; c=summary['a146p_reconstruction_ksunext']
+          shared=set(b['imports'])&set(c['imports'])
+          shared_crc=sorted(set(b['crcs'])&set(c['crcs']))
+          disagreement={n:{'bk':f"0x{b['crcs'][n]:08x}",'ksunext':f"0x{c['crcs'][n]:08x}"} for n in shared_crc if b['crcs'][n]!=c['crcs'][n]}
+          comparison={'source_release':'https://github.com/bklynali/BK-KSU/releases/tag/v1.1.4',
+            'oem_stock_release':'6.6.89-android15-8-abA146PXXUHEZB1-4k',
+            'bk_release_matches_stock':b['vermagic_release']=='6.6.89-android15-8-abA146PXXUHEZB1-4k',
+            'bk':{k:v for k,v in b.items() if k not in ('imports','crcs')},
+            'prior':{k:v for k,v in c.items() if k not in ('imports','crcs')},
+            'shared_import_count':len(shared),
+            'bk_unique_import_count':len(set(b['imports'])-set(c['imports'])),
+            'bk_unique_imports':sorted(set(b['imports'])-set(c['imports'])),
+            'ksunext_unique_import_count':len(set(c['imports'])-set(b['imports'])),
+            'shared_crc_record_count':len(shared_crc),
+            'shared_crc_record_matches':len(shared_crc)-len(disagreement),
+            'shared_crc_record_mismatches':disagreement,
+            'bk_imports_without_version_crcs':sorted(n for n in b['imports'] if n not in b['crcs']),
+            'ready_to_load_on_oem':False,
+            'oem_abi_equivalent':False,
+            'factory_locked_root_demonstrated':False}
+          (dst/'module-imports-and-crc-summary.json').write_text(json.dumps(comparison,indent=2)+'\n')
+          with (dst/'bk-all-module-undefined-imports.tsv').open('w') as f:
+            f.write('symbol\tbk_module_crc\tcomparison_to_prior_candidate\tprior_candidate_crc\n')
+            for sym in b['imports']:
+              bv=b['crcs'].get(sym);cv=c['crcs'].get(sym)
+              state=('BK_NO_CRC' if bv is None else 'NO_PRIOR_CRC_REFERENCE' if cv is None else 'MATCH_PRIOR_CRC' if bv==cv else 'MISMATCH_PRIOR_CRC')
+              f.write(f"{sym}\t{'' if bv is None else format(bv,'#010x')}\t{state}\t{'' if cv is None else format(cv,'#010x')}\n")
+          with (dst/'bk-all-crc-records.tsv').open('w') as f:
+            f.write('symbol\tbk_crc\tprior_crc\tstatus\n')
+            for sym,val in sorted(b['crcs'].items()):
+              old=c['crcs'].get(sym)
+              state='NOT_IN_PRIOR_CANDIDATE' if old is None else 'MATCH' if old==val else 'MISMATCH'
+              f.write(f"{sym}\t{val:#010x}\t{'' if old is None else format(old,'#010x')}\t{state}\n")
+          print(json.dumps({k:v for k,v in comparison.items() if k not in ('bk_unique_imports','bk_imports_without_version_crcs')},indent=2))
+          PY
+          file work/BK-KSU-v1.1.4-android15-6.6-UNVERIFIED.ko | tee report/BK-module-file-type.txt
+          readelf -p .modinfo work/BK-KSU-v1.1.4-android15-6.6-UNVERIFIED.ko > report/BK-modinfo.txt
+      - name: Upload reports only; NEVER distribute modules/APK as compatibility candidates
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: A146P-BK-KSU-v114-STATIC-ABI-COMPARISON-REPORT-ONLY
+          path: report/
+          if-no-files-found: warn
