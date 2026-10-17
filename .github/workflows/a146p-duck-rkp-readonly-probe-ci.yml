@@ -1,0 +1,54 @@
+name: A146P MediaTek Duck RKP read-only hardware probe checks
+on:
+  push:
+    branches: [a146p-ksunext-stock-build]
+    paths:
+      - a146p-stock/tools/a146p-duck-rkp-readonly-probe.sh
+      - .github/workflows/a146p-duck-rkp-readonly-probe-ci.yml
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  probe-smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - name: POSIX shell syntax verification
+        run: |
+          set -eu
+          sh -n a146p-stock/tools/a146p-duck-rkp-readonly-probe.sh
+          dash -n a146p-stock/tools/a146p-duck-rkp-readonly-probe.sh
+      - name: Simulated MediaTek SoC and AIDL service (no hardware or TA contact)
+        run: |
+          set -eu
+          mkdir -p work/mockbin report
+          cat > work/mockbin/getprop <<'EOF'
+          #!/bin/sh
+          case "$1" in
+            ro.product.model) echo SM-A146P;;
+            ro.hardware|ro.boot.hardware|ro.board.platform) echo mt6833;;
+            ro.soc.manufacturer) echo MediaTek;;
+            ro.product.cpu.abi) echo arm64-v8a;;
+            ro.build.version.sdk) echo 35;;
+          esac
+          EOF
+          cat > work/mockbin/service <<'EOF'
+          #!/bin/sh
+          if [ "$1" = list ]; then
+            echo 'android.hardware.security.keymint.IRemotelyProvisionedComponent/default: [android.hardware.security.keymint.IRemotelyProvisionedComponent]'
+            echo 'android.hardware.security.keymint.IKeyMintDevice/default: [android.hardware.security.keymint.IKeyMintDevice]'
+          fi
+          EOF
+          chmod +x work/mockbin/getprop work/mockbin/service
+          PATH="$PWD/work/mockbin:$PATH" sh a146p-stock/tools/a146p-duck-rkp-readonly-probe.sh > report/mock-mediatek-probe.txt
+          grep -q 'ro.board.platform=mt6833' report/mock-mediatek-probe.txt
+          grep -q 'ro.soc.manufacturer=MediaTek' report/mock-mediatek-probe.txt
+          grep -q 'IRemotelyProvisionedComponent/default' report/mock-mediatek-probe.txt
+          grep -q 'no KeyMint TA operation occurred' report/mock-mediatek-probe.txt
+          echo 'READ-ONLY SCRIPT SYNTAX AND MOCK PROBE PASSED'
+      - name: Upload non-sensitive synthetic output only
+        uses: actions/upload-artifact@v4
+        with:
+          name: A146P-DUCK-RKP-READONLY-PROBE-MOCK-REPORT-ONLY
+          path: report/mock-mediatek-probe.txt
